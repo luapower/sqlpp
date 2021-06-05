@@ -67,35 +67,33 @@ function M.new()
 			goto again
 		end
 		if c == '\'' or c == '"' then --`' ... '` or --`" ... "` string
-			local t = {}
 			while true do
 				local patt = c == '\'' and
-					'()([\'\\])()(.)' or
-					'()([\"\\])()(.)'
+					"()(['\\])()(.)" or
+					'()(["\\])()(.)'
 				local i1, c, j1, c2 = s:match(patt, j)
 				if not c then
-					yield('error', i1+1, i1+1, 'unfinished string')
+					yield('error', i, i, 'unfinished string')
 					return
 				end
-				add(t, s:sub(j, i1-1))
 				j = j1
 				if c == '\\' then -- backslash escape
 					if c2 == '' then
 						yield('error', i1+1, i1+1, 'unfinished backslash escape')
 						return
 					end
-					add(t, esc[c] or c)
+					j = j+1
 				elseif
 					(c == '\'' and c2 == '\'') or
 					(c == '\"' and c2 == '\"')
 				then -- `foo''s bar` or `foo""s bar` quote-quote
-					add(t, c2)
+					j = j + 1
 				else --end of string
 					break
 				end
 			end
 			local token = c == '"' and pp.ansi_quotes and 'ident' or 'string'
-			yield(token, i+1, j-1, table.concat(t))
+			yield(token, i, j)
 			i = j
 			goto again
 		end
@@ -399,10 +397,10 @@ $table foo (
 ]])
 
 	local sql = [[
-		select * from table where name = 'some' and id <= 5;
+		select * from table where name = 'so\'me foo''s bar' and id <= 5;
 	]]
-	for tk, i, j, s in pp.tokens(sql) do
-		print(tk, i, j, i and j and sql:sub(i, j-1), s)
+	for tk, i, j, err in pp.tokens(sql) do
+		print(tk, i, j, i and j and sql:sub(i, j-1), err or '')
 	end
 
 end
