@@ -66,11 +66,9 @@ function M.new()
 			i = j
 			goto again
 		end
-		if c == '\'' or c == '"' then --`' ... '` or --`" ... "` string
+		if c == '\'' or c == '"' or c == '`' then --string or backtick ident
 			while true do
-				local patt = c == '\'' and
-					"()(['\\])()(.)" or
-					'()(["\\])()(.)'
+				local patt = '()(['..c..'\\])()(.)'
 				local i1, c, j1, c2 = s:match(patt, j)
 				if not c then
 					yield('error', i, i, 'unfinished string')
@@ -83,16 +81,14 @@ function M.new()
 						return
 					end
 					j = j+1
-				elseif
-					(c == '\'' and c2 == '\'') or
-					(c == '\"' and c2 == '\"')
-				then -- `foo''s bar` or `foo""s bar` quote-quote
+				elseif c2 == c then -- `foo''s bar` or `foo""s bar` quote-quote
 					j = j + 1
 				else --end of string
 					break
 				end
 			end
-			local token = c == '"' and pp.ansi_quotes and 'ident' or 'string'
+			local token = (c == '`' or (c == '"' and pp.ansi_quotes))
+				and 'ident' or 'string'
 			yield(token, i, j)
 			i = j
 			goto again
@@ -120,7 +116,8 @@ function M.new()
 			i = j
 			goto again
 		end
-		local j = s:match('^[%a_][%w_]*()', i) --keyword or identifier
+		local j = s:match('^[%a_$][%w_$]*()', i) --keyword or identifier
+
 		if j then
 			yield('ident', i, j)
 			i = j
@@ -397,7 +394,7 @@ $table foo (
 ]])
 
 	local sql = [[
-		select * from table where name = 'so\'me foo''s bar' and id <= 5;
+		select * from `table` where name = 'so\'me foo''s bar' and id <= 5;
 	]]
 	for tk, i, j, err in pp.tokens(sql) do
 		print(tk, i, j, i and j and sql:sub(i, j-1), err or '')
