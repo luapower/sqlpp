@@ -364,7 +364,7 @@ function M.package.mysql_domains(pp)
 	pp.subst'bool1   tinyint not null default 1'
 	pp.subst'atime   timestamp not null'
 	pp.subst'ctime   timestamp not null default current_timestamp'
-	pp.subst'mtime   timestamp not null on update current_timestamp'
+	pp.subst'mtime   timestamp not null default current_timestamp on update current_timestamp'
 	pp.subst'money   decimal(20,6)'
 	pp.subst'qty     decimal(20,6)'
 	pp.subst'percent decimal(20,6)'
