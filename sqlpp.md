@@ -42,10 +42,24 @@ __modules__
 
 ## Preprocessor
 
+### `sqlpp.new() -> spp`
+
+Create a preprocessor instance that modules can be loaded into.
+
 ### `spp.query(sql, [params]) -> sql`
 
 Preprocess a SQL query, including hashtag conditionals, macro substitutions,
 quoted and unquoted param substitutions, symbol substitutions and removing comments.
+
+Notes on value expansion:
+
+  * `{foo, bar}` expands to `foo, bar`, which is mostly useful for `in (?)`
+  expressions (also because `{}` expands to `null` instead of empty string
+  which would result in `in ()` which is invalid syntax in MySQL).
+
+### `spp.queries(sql, [params]) -> {sql1, ...}`
+
+Preprocess multiple SQL queries separated by `;`.
 
 ### `spp.keyword.KEYWORD -> symbol`
 
@@ -65,12 +79,21 @@ pp.keywords[require'cjson'.null] = 'null'
 
 This enables using JSON null values as SQL parameters.
 
+### `spp.subst'NAME text...'`
+
+Create an unquoted text substitution for `$NAME`.
+
+### `function spp.macro.NAME(...) end`
+
+Create a macro to be used as `$NAME(...)`. Param args are expanded before
+macros.
+
 ## Modules
 
 ### `spp.require'mysql_quote'`
 
-MySQL module for correct quoting of values: `inf` and `nan` go `null`,
-booleans go `1` and `0`.
+MySQL module for specific quoting of values: `inf` and `nan` expand to `null`,
+booleans expand to `1` and `0`.
 
 ### `pp.require'mysql_ddl'`
 

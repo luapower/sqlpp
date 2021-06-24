@@ -106,7 +106,7 @@ function M.new()
 	end
 
 	function pp.number(x) --stub
-		return fmt('%0.17g', v) --max precision, min length.
+		return fmt('%0.17g', x) --max precision, min length.
 	end
 
 	function pp.boolean(v) --stub
@@ -130,21 +130,12 @@ function M.new()
 		elseif type(v) == 'boolean' then
 			return pp.boolean(v)
 		elseif type(v) == 'table' then
-			if #v > 0 then --list: for use in `in ()`
+			if #v > 0 then --list: for use in `in (?)`
 				local t = {}
 				for i,v in ipairs(v) do
 					t[i] = sqlval(v)
 				end
 				return table.concat(t, v.op or ', ')
-			elseif next(v) ~= nil then
-				assert(v.op, 'op required')
-				local t = {}
-				for k,v in ipairs(v) do
-					t[#t+1] = sqlname(k)
-					t[#t+1] = ' = '
-					t[#t+1] = sqlval(v)
-				end
-				return table.concat(t, v.op)
 			else --empty list: good for 'in (?)' but NOT GOOD for `not in (?)` !!!
 				return 'null'
 			end
@@ -237,7 +228,7 @@ function M.new()
 	function pp.require(pkg)
 		for pkg in pkg:gmatch'[^%s]+' do
 			if not pp.package[pkg] then
-				assertf(M.package[pkg], 'no macro module: %s', pkg)(pp)
+				assertf(M.package[pkg], 'no sqlpp module: %s', pkg)(pp)
 				pp.package[pkg] = true
 			end
 		end
@@ -269,13 +260,14 @@ function M.package.mysql_ddl(pp)
 	pp.subst'table  create table if not exists'
 
 	local function constable(name)
-		return pp.query1([[
+		local rows = pp.run_query([[
 			select c.table_name from information_schema.table_constraints c
 			where c.table_schema = ? and c.constraint_name = ?
 		]], pp.db_name)
+		return rows[1] --single-column result returned as array of values.
 	end
 
-	pp.allow_drop = true
+	pp.allow_drop = false
 
 	function pp.macro.drop_fk(name)
 		if not pp.allow_drop then return end
@@ -289,8 +281,12 @@ function M.package.mysql_ddl(pp)
 		return fmt('drop table if exists %s', name)
 	end
 
+	local function cols(s, sep)
+		return s:gsub('%s+', sep or ',')
+	end
+
 	local function fkname(tbl, col)
-		return fmt('fk_%s_%s', tbl, col:gsub('%s', ''):gsub(',', '_'))
+		return fmt('fk_%s_%s', tbl, cols(col, '_'))
 	end
 
 	function pp.macro.fk(tbl, col, ftbl, fcol, ondelete, onupdate)
@@ -299,12 +295,16 @@ function M.package.mysql_ddl(pp)
 		local a1 = ondelete ~= 'restrict' and ' on delete '..ondelete or ''
 		local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
 		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
-			fkname(tbl, col), col, ftbl, fcol or col, a1, a2)
+			fkname(tbl, col), cols(col), ftbl, cols(fcol or col), a1, a2)
 	end
 
 	function pp.macro.uk(tbl, col)
 		return fmt('constraint uk_%s_%s unique key (%s)',
-			tbl, col:gsub('%s', ''):gsub(',', '_'), col)
+			tbl, cols(col, '_'), cols(col))
+	end
+
+	function pp.macro.ix(tbl, col)
+		return fmt('index ix_%s_%s (%s)', tbl, cols(col, '_'), cols(col))
 	end
 
 	function pp.macro.add_fk(tbl, col, ...)
@@ -320,12 +320,12 @@ create database if not exists %s
 	end
 
 	function pp.create_database(name)
-		query(pp.query('$create_database(??);', name))
+		pp.run_query(pp.query('$create_database(??);', name))
 	end
 
 	function pp.drop_table(s)
 		for name in s:gmatch'[^%s]+' do
-			query(pp.query('$drop_table(??);', name))
+			pp.run_query(pp.query('$drop_table(??);', name))
 		end
 	end
 
