@@ -26,6 +26,9 @@ Features:
 `spp.boolean(v) -> s`                       boolean formatting stub
 `spp.name(s) -> s`                          name formatting stub
 `spp.value(v) -> s`                         format any value
+`spp.rows(rows[, indent]) -> s`             format a list of rows
+`spp.tsv_rows(opt, s) -> rows`              convert a tab-separated list to a list of rows
+`spp.tsv(opt, s) -> s`                      format a tab-separated list
 `spp.keyword.KEYWORD -> symbol`             get a symbol for a keyword
 `spp.keywords[SYMBOL] = keyword`            set a keyword for a symbol
 `spp.subst'NAME text...'`                   create a substitution for `$NAME`

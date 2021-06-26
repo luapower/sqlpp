@@ -133,9 +133,9 @@ function M.new()
 			if #v > 0 then --list: for use in `in (?)`
 				local t = {}
 				for i,v in ipairs(v) do
-					t[i] = sqlval(v)
+					t[i] = pp.value(v)
 				end
-				return table.concat(t, v.op or ', ')
+				return concat(t, ', ')
 			else --empty list: good for 'in (?)' but NOT GOOD for `not in (?)` !!!
 				return 'null'
 			end
@@ -144,6 +144,105 @@ function M.new()
 		else
 			return nil, 'invalid value ' .. v
 		end
+	end
+
+	local function pad(s, n, dir)
+		local pad = (' '):rep(n - #s)
+		return dir == 'left' and pad..s or s..pad
+	end
+
+	function pp.rows(rows, t) --{{v1,...},...} -> '(v1,...),\n (v2,...)'
+		local max_sizes = {}
+		local pad_dirs = {}
+		local srows = {}
+		for ri,row in ipairs(rows) do
+			local srow = {}
+			srows[ri] = srow
+			local n = t and t.n or #row
+			for ci = 1, n do
+				local s = row[ci]
+				if type(s) == 'function' then --self-generating value.
+					s = s()
+				else
+					pad_dirs[ci] = type(s) == 'number' and 'left' or 'right'
+					local convert = t and t[ci] or pp.value
+					if type(convert) == 'function' then --col transform.
+						s = convert(s)
+					else --constant.
+						s = convert
+					end
+				end
+				srow[ci] = s
+				max_sizes[ci] = math.max(max_sizes[ci] or 0, #s)
+			end
+		end
+		local dt = {}
+		local prefix = (t and t.indent or '')..'('
+		for ri,row in ipairs(srows) do
+			local t = {}
+			for ci,s in ipairs(row) do
+				t[ci] = pad(s, max_sizes[ci], pad_dirs[ci])
+			end
+			dt[ri] = prefix..concat(t, ', ')..')'
+		end
+		return concat(dt, ',\n')
+	end
+
+	function pp.tsv_rows(t, s) --{n=3|cols='3 1 2', transform1, ...}
+		s = glue.trim(s)
+		local cols
+		if t.cols then
+			cols = {}
+			for s in t.cols:gmatch'[^%s]+' do
+				cols[#cols+1] = assert(tonumber(s))
+			end
+		end
+		local n = t.n
+		if not n then
+			if cols then
+				local cols = glue.extend({}, cols)
+				table.sort(cols)
+				n = cols[#cols]
+			else
+				local s = s:match'^[^\r\n]+'
+				if s then
+					n = 1
+					for _ in s:gmatch'\t' do
+						n = n + 1
+					end
+				else
+					n = 1
+				end
+			end
+		end
+		cols = cols and glue.index(cols) --{3, 1, 2} -> {[3]->1, [1]->2, [2]->3}
+		local patt = '^'..('(.-)\t'):rep(n-1)..'(.*)'
+		local function transform_line(row, ...)
+			for i=1,n do
+				local di = not cols and i or cols[i]
+				if di then
+					local s = select(i,...)
+					local transform_val = t[i]
+					if transform_val then
+						s = transform_val(s)
+					end
+					row[di] = s
+				end
+			end
+		end
+		local rows = {}
+		local ri = 1
+		for s in glue.lines(s) do
+			local row = {}
+			rows[ri] = row
+			transform_line(row, s:match(patt))
+			ri = ri + 1
+		end
+		return rows
+	end
+
+	function pp.tsv(t, s)
+		return pp.rows(pp.tsv_rows(t, s), t.rows)
 	end
 
 	local function named_params(sql, t)
