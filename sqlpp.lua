@@ -320,12 +320,12 @@ create database if not exists %s
 	end
 
 	function pp.create_database(name)
-		pp.run_query(pp.query('$create_database(??);', name))
+		pp.run_query(pp.query('$create_database(??);', {name}))
 	end
 
 	function pp.drop_table(s)
 		for name in s:gmatch'[^%s]+' do
-			pp.run_query(pp.query('$drop_table(??);', name))
+			pp.run_query(pp.query('$drop_table(??);', {name}))
 		end
 	end
 
@@ -350,8 +350,9 @@ function M.package.mysql_domains(pp)
 	pp.subst'percent  decimal(20,6)'
 	pp.subst'count    int unsigned not null default 0'
 	pp.subst'pos      int unsigned'
-	pp.subst'lang     char(2) character set ascii not null'
-	pp.subst'currency char(3) character set ascii not null'
+	pp.subst'lang     char(2) character set ascii'
+	pp.subst'currency char(3) character set ascii'
+	pp.subst'country  char(2) character set ascii'
 end
 
 function M.package.mysql(pp)
