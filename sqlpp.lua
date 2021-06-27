@@ -78,7 +78,9 @@ function M.new()
 			elseif state.active then
 				line = line:gsub('%-%-.*', '') --remove `-- ...` comments
 				line = line:gsub('#.*', '') -- remove `# ...` comments
-				add(t, line)
+				if glue.trim(line) ~= '' then
+					add(t, line)
+				end
 			end
 		end
 		assert(level == 1, '#endif missing')
