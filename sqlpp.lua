@@ -30,8 +30,12 @@ function M.new()
 
 	--process #if #elif #else #endif conditionals.
 	--also normalize newlines and remove single-line comments.
+	--NOTE: not removing multiline comments, those are used for hints.
+	local globals_mt = {__index = _G}
 	local function parse_expr(s, params)
 		local f = assert(loadstring('return '..s))
+		params = glue.update({}, params) --copy it so we alter it
+		setmetatable(params, globals_mt)
 		setfenv(f, params)
 		return f()
 	end
@@ -148,11 +152,6 @@ function M.new()
 		end
 	end
 
-	local function pad(s, n, dir)
-		local pad = (' '):rep(n - #s)
-		return dir == 'left' and pad..s or s..pad
-	end
-
 	function pp.rows(rows, t) --{{v1,...},...} -> '(v1,...),\n (v2,...)'
 		local max_sizes = {}
 		local pad_dirs = {}
@@ -183,7 +182,7 @@ function M.new()
 		for ri,row in ipairs(srows) do
 			local t = {}
 			for ci,s in ipairs(row) do
-				t[ci] = pad(s, max_sizes[ci], pad_dirs[ci])
+				t[ci] = glue.pad(s, max_sizes[ci], ' ', pad_dirs[ci])
 			end
 			dt[ri] = prefix..concat(t, ', ')..')'
 		end
@@ -360,35 +359,34 @@ function M.package.mysql_ddl(pp)
 
 	pp.subst'table  create table if not exists'
 
-	local function constable(name)
+	local function index_exists(name)
 		local rows = pp.run_query([[
-			select c.table_name from information_schema.table_constraints c
-			where c.table_schema = ? and c.constraint_name = ?
-		]], pp.db_name)
+			select i.name from information_schema.innodb_indexes i
+			where i.name = ?
+		]], name)
 		return rows[1] --single-column result returned as array of values.
 	end
 
-	pp.allow_drop = false
-
-	function pp.macro.drop_fk(name)
-		if not pp.allow_drop then return end
-		local tbl = constable(name)
-		if not tbl then return end
-		return fmt('alter table %s drop foreign key %s', tbl, name)
+	local function cols(s, newsep)
+		return s:gsub('%s+', newsep or ',')
 	end
 
-	function pp.macro.drop_table(name)
-		if not pp.allow_drop then return end
-		return fmt('drop table if exists %s', name)
+	local function dename(s)
+		return s:gsub('`', '')
 	end
 
-	local function cols(s, sep)
-		return s:gsub('%s+', sep or ',')
+	local function deixcol(s)
+		return s
+			:gsub(' asc$', ''):gsub(' desc$', '')
+			:gsub(' asc ', ''):gsub(' desc ', '')
 	end
 
-	local function fkname(tbl, col)
-		return fmt('fk_%s_%s', tbl, cols(col, '_'))
+	local function indexname(type, tbl, col)
+		return fmt('%s_%s_%s', type, dename(tbl), dename(cols(col, '_')))
 	end
+	local function fkname(tbl, col) return indexname('fk', tbl, col) end
+	local function ukname(tbl, col) return indexname('uk', tbl, col) end
+	local function ixname(tbl, col) return indexname('ix', tbl, deixcol(col)) end
 
 	function pp.macro.fk(tbl, col, ftbl, fcol, ondelete, onupdate)
 		ondelete = ondelete or 'restrict'
@@ -400,17 +398,32 @@ function M.package.mysql_ddl(pp)
 	end
 
 	function pp.macro.uk(tbl, col)
-		return fmt('constraint uk_%s_%s unique key (%s)',
-			tbl, cols(col, '_'), cols(col))
+		return fmt('constraint %s unique key (%s)', ukname(tbl, col), cols(col))
+	end
+
+	local function ixcols(s)
+		return cols(s)
+			:gsub(',asc$', ' asc'):gsub(',desc$', ' desc')
+			:gsub(',asc,', ' asc,'):gsub(',desc,', ' desc,')
 	end
 
 	function pp.macro.ix(tbl, col)
-		return fmt('index ix_%s_%s (%s)', tbl, cols(col, '_'), cols(col))
+		return fmt('index %s (%s)', ixname(tbl, col), ixcols(col))
 	end
 
-	function pp.macro.add_fk(tbl, col, ...)
-		if constable(fkname(tbl, col)) then return end
+	function pp.macro.create_fk(tbl, col, ...)
+		if index_exists(fkname(tbl, col)) then return end
 		return fmt('alter table %s add %s', tbl, pp.macro.fk(tbl, col, ...))
+	end
+
+	function pp.macro.create_uk(tbl, col)
+		if index_exists(ukname(tbl, col)) then return end
+		return fmt('alter table %s add %s', tbl, pp.macro.uk(tbl, col))
+	end
+
+	function pp.macro.create_ix(tbl, col)
+		if index_exists(ixname(tbl, col)) then return end
+		return fmt('alter table %s add %s', tbl, pp.macro.ix(tbl, col))
 	end
 
 	function pp.macro.create_database(name)
@@ -420,15 +433,57 @@ create database if not exists %s
 	collate utf8mb4_unicode_ci]], name)
 	end
 
-	function pp.create_database(name)
-		pp.run_query(pp.query('$create_database(??);', {name}))
+	pp.allow_drop = false
+
+	local function drop_index(type, tbl, col)
+		local name = indexname(type, tbl, col)
+		if not pp.allow_drop then return end
+		if not index_exists(name) then return end
+		local s =
+			   type == 'fk' and 'foreign key'
+			or type == 'uk' and 'unique key'
+			or type == 'ix' and 'index'
+			or assert(false)
+		return fmt('alter table %s drop %s %s', s, tbl, name)
 	end
 
-	function pp.drop_table(s)
-		for name in s:gmatch'[^%s]+' do
-			pp.run_query(pp.query('$drop_table(??);', {name}))
-		end
+	function pp.macro.drop_fk(tbl, col) return drop_index('fk', tbl, col) end
+	function pp.macro.drop_uk(tbl, col) return drop_index('uk', tbl, col) end
+	function pp.macro.drop_ix(tbl, col) return drop_index('ix', tbl, col) end
+
+	function pp.macro.drop_table(name)
+		if not pp.allow_drop then return end
+		return fmt('drop table if exists %s', name)
 	end
+
+	local function run_macro(name, ...)
+		local sql = pp.macro[name](...)
+		if not sql then return end
+		return pp.run_query(sql)
+	end
+
+	function pp.drop_tables(s)
+		local dt = {}
+		for name in s:gmatch'[^%s]+' do
+			dt[#dt+1] = run_macro('drop_table', pp.name(name))
+		end
+		return dt
+	end
+
+	function pp.create_database(name)
+		return run_macro('create_database', pp.name(name))
+	end
+
+	function pp.create_fk(tbl, col, ftbl, fcol, ...)
+		return run_macro('create_fk', pp.name(tbl), col, ftbl and pp.name(ftbl), fcol, ...)
+	end
+
+	function pp.create_uk(tbl, col) return run_macro('create_uk', pp.name(tbl), col) end
+	function pp.create_ix(tbl, col) return run_macro('create_ix', pp.name(tbl), col) end
+
+	function pp.drop_fk(tbl, col) return run_macro('drop_fk', pp.name(tbl), col) end
+	function pp.drop_uk(tbl, col) return run_macro('drop_uk', pp.name(tbl), col) end
+	function pp.drop_ix(tbl, col) return run_macro('drop_ix', pp.name(tbl), col) end
 
 end
 
