@@ -24,7 +24,7 @@ local esc = {
 
 function M.new()
 
-	local pp = {package = {}}
+	local pp = {package = {}, command = {}}
 
 	--conditional compilation -------------------------------------------------
 
@@ -120,6 +120,7 @@ function M.new()
 	end
 
 	function pp.name(v)
+		assert(v, 'names cannot be missing')
 		if v:sub(1, 1) == '`' and v:sub(-1, -1) == '`' then
 			return v
 		end
@@ -248,7 +249,12 @@ function M.new()
 
 	local function named_params(sql, t)
 		local names = {}
-		local sql = sql:gsub(':([%w_:]+)', function(k)
+		local sql = sql:gsub('::([%w_]+)', function(k)
+			add(names, k)
+			local v, err = pp.name(t[k])
+			return assertf(v, 'param %s: %s\n%s', k, err, sql)
+		end)
+		local sql = sql:gsub(':([%w_]+)', function(k)
 			add(names, k)
 			local v, err = pp.value(t[k])
 			return assertf(v, 'param %s: %s\n%s', k, err, sql)
@@ -298,29 +304,46 @@ function M.new()
 	end
 
 	local function pp_macros(sql)
-		sql = sql:gsub('$([%w_]+)(%b())', macro_subst) --$foo(arg1,...)
+		--we do this in two steps because we want to be able to yield from gsub.
+		local macros = {}
+		local function collect_macro(name, args)
+			add(macros, name)
+			add(macros, args)
+			return '\0' --marker
+		end
+		sql = sql:gsub('$([%w_]+)(%b())', collect_macro) --$foo(arg1,...)
+		local macro_results = {}
+		for i = 1, #macros, 2 do
+			local name, args = macros[i], macros[i+1]
+			add(macro_results, macro_subst(name, args) or '')
+		end
+		local i = 0
+		sql = sql:gsub('%z', function()
+			i = i + 1
+			return macro_results[i]
+		end)
 		sql = sql:gsub('$([%w_]+)', defines) --$foo
 		return sql
 	end
 
 	--preprocessor ------------------------------------------------------------
 
-	function pp.query(sql, t)
+	function pp.query(sql, t, delim)
 		t = t or glue.empty
 		local sql = glue.subst(sql, t) --{foo}
-		local sql = pp_ifs(sql, t)  --#if ... #endif
+		local sql = pp_ifs(sql, t) --#if ... #endif
 		local sql = pp_macros(sql) --$foo and $foo(args...)
+		local sqls = {}
+		--TODO: separate multiple queries based on delim and support `delimiter` command.
+		--expanding the values must be the last step because after string
+		--values are expanded, we can't parse with regex anymore.
 		local sql, names = pp.params(sql, t) -- ? ?? :foo :foo
 		return sql, names
 	end
 
-	function pp.queries(sql, t)
-		sql = pp.query(sql, t)
-		local dt = {}
-		for sql in sql:gmatch'[^;]+' do
-			add(dt, sql)
-		end
-		return dt
+	function pp.queries(sql, t, delim)
+		local sql = pp.query(sql, t, delim)
+		return {sql}
 	end
 
 	--module system -----------------------------------------------------------
@@ -332,6 +355,18 @@ function M.new()
 				pp.package[pkg] = true
 			end
 		end
+	end
+
+	--commands ----------------------------------------------------------------
+
+	function pp.command_api(run_query)
+		local api = {}
+		for name,f in pairs(pp.command) do
+			api[name] = function(...)
+				return f(run_query, ...)
+			end
+		end
+		return api
 	end
 
 	return pp
@@ -359,12 +394,34 @@ function M.package.mysql_ddl(pp)
 
 	pp.subst'table  create table if not exists'
 
-	local function index_exists(name)
-		local rows = pp.run_query([[
-			select i.name from information_schema.innodb_indexes i
+	local cmd = pp.command
+
+	function cmd.index_exists(q, name)
+		return q([[
+			select 1 from information_schema.innodb_indexes i
 			where i.name = ?
-		]], name)
-		return rows[1] --single-column result returned as array of values.
+		]], name)[1] ~= nil --single-column result returned as array of values.
+	end
+
+	function cmd.trigger_exists(q, name)
+		return q([[
+			select 1 from information_schema.triggers
+			where trigger_name = ?
+		]], name)[1] ~= nil
+	end
+
+	function cmd.proc_exists(q, name)
+		return q([[
+			select 1 from information_schema.routines
+			where routine_schema = database() and routine_name = ?
+		]], name)[1] ~= nil
+	end
+
+	function cmd.column_exists(q, tbl, name)
+		return q([[
+			select 1 from information_schema.columns
+			where table_schema = database() and table_name = ? and column_name = ?
+		]], tbl, name)[1] ~= nil
 	end
 
 	local function cols(s, newsep)
@@ -411,79 +468,141 @@ function M.package.mysql_ddl(pp)
 		return fmt('index %s (%s)', ixname(tbl, col), ixcols(col))
 	end
 
-	function pp.macro.create_fk(tbl, col, ...)
-		if index_exists(fkname(tbl, col)) then return end
-		return fmt('alter table %s add %s', tbl, pp.macro.fk(tbl, col, ...))
-	end
+	--commands
 
-	function pp.macro.create_uk(tbl, col)
-		if index_exists(ukname(tbl, col)) then return end
-		return fmt('alter table %s add %s', tbl, pp.macro.uk(tbl, col))
-	end
-
-	function pp.macro.create_ix(tbl, col)
-		if index_exists(ixname(tbl, col)) then return end
-		return fmt('alter table %s add %s', tbl, pp.macro.ix(tbl, col))
-	end
-
-	function pp.macro.create_database(name)
-		return fmt([[
-create database if not exists %s
+	function cmd.create_database(q, name)
+		return q([[
+create database if not exists ??
 	character set utf8mb4
-	collate utf8mb4_unicode_ci]], name)
+	collate utf8mb4_unicode_ci]], pp.name(name))
+	end
+
+	function cmd.add_fk(q, tbl, col, ftbl, ...)
+		if cmd.index_exists(q, fkname(tbl, col)) then return end
+		return q('alter table ?? add ' ..
+			pp.macro.fk(pp.name(tbl), col, pp.name(ftbl), ...), tbl)
+	end
+
+	function cmd.add_uk(q, tbl, col)
+		if cmd.index_exists(q, ukname(tbl, col)) then return end
+		return q('alter table ?? add ' .. pp.macro.uk(pp.name(tbl), col), tbl)
+	end
+
+	function cmd.add_ix(q, tbl, col)
+		if cmd.index_exists(q, ixname(tbl, col)) then return end
+		return q('alter table ?? add ' .. pp.macro.ix(pp.name(tbl), col), tbl)
 	end
 
 	pp.allow_drop = false
 
-	local function drop_index(type, tbl, col)
+	local function drop_index(q, type, tbl, col)
 		local name = indexname(type, tbl, col)
 		if not pp.allow_drop then return end
-		if not index_exists(name) then return end
+		if not cmd.index_exists(q, name) then return end
 		local s =
 			   type == 'fk' and 'foreign key'
 			or type == 'uk' and 'unique key'
 			or type == 'ix' and 'index'
 			or assert(false)
-		return fmt('alter table %s drop %s %s', s, tbl, name)
+		return q(fmt('alter table ?? drop %s %s', s, name), tbl)
 	end
 
-	function pp.macro.drop_fk(tbl, col) return drop_index('fk', tbl, col) end
-	function pp.macro.drop_uk(tbl, col) return drop_index('uk', tbl, col) end
-	function pp.macro.drop_ix(tbl, col) return drop_index('ix', tbl, col) end
+	function cmd.drop_fk(q, tbl, col) return drop_index(q, 'fk', tbl, col) end
+	function cmd.drop_uk(q, tbl, col) return drop_index(q, 'uk', tbl, col) end
+	function cmd.drop_ix(q, tbl, col) return drop_index(q, 'ix', tbl, col) end
 
-	function pp.macro.drop_table(name)
+	function cmd.drop_table(q, name)
 		if not pp.allow_drop then return end
-		return fmt('drop table if exists %s', name)
+		return q('drop table if exists ??', name)
 	end
 
-	local function run_macro(name, ...)
-		local sql = pp.macro[name](...)
-		if not sql then return end
-		return pp.run_query(sql)
-	end
-
-	function pp.drop_tables(s)
+	function cmd.drop_tables(q, s)
 		local dt = {}
 		for name in s:gmatch'[^%s]+' do
-			dt[#dt+1] = run_macro('drop_table', pp.name(name))
+			dt[#dt+1] = cmd.drop_table(q, name)
 		end
 		return dt
 	end
 
-	function pp.create_database(name)
-		return run_macro('create_database', pp.name(name))
+	local add_trigger_sql = [[
+create trigger ::name {where} on ::table for each row
+begin
+{code}
+end]]
+
+	local function triggername(name, tbl, where)
+		local s = where:gsub('([^%s])[^%s]*%s*', '%1')
+		return fmt('%s_%s_%s', tbl, s, name)
 	end
 
-	function pp.create_fk(tbl, col, ftbl, fcol, ...)
-		return run_macro('create_fk', pp.name(tbl), col, ftbl and pp.name(ftbl), fcol, ...)
+	function cmd.readd_trigger(q, name, tbl, where, code)
+		local name = triggername(name, tbl, where)
+		q('lock tables ?? write', tbl)
+		q('drop trigger if exists ??', name)
+		code = glue.outdent(code, '\t')
+		q(add_trigger_sql, {name = name, table = tbl, where = where, code = code})
+		q('unlock tables')
 	end
 
-	function pp.create_uk(tbl, col) return run_macro('create_uk', pp.name(tbl), col) end
-	function pp.create_ix(tbl, col) return run_macro('create_ix', pp.name(tbl), col) end
+	function cmd.add_trigger(q, name, tbl, where, code)
+		local name = triggername(name, tbl, where)
+		if cmd.trigger_exists(q, name) then return end
+		code = glue.outdent(code, '\t')
+		return q(add_trigger_sql, {name = name, table = tbl, where = where, code = code})
+	end
 
-	function pp.drop_fk(tbl, col) return run_macro('drop_fk', pp.name(tbl), col) end
-	function pp.drop_uk(tbl, col) return run_macro('drop_uk', pp.name(tbl), col) end
-	function pp.drop_ix(tbl, col) return run_macro('drop_ix', pp.name(tbl), col) end
+	function cmd.drop_trigger(q, name, tbl, where)
+		local name = triggername(name, tbl, where)
+		return q('drop trigger if exists ??', name)
+	end
+
+	function cmd.add_proc(q, name, args, code)
+		if cmd.proc_exists(q, name) then return end
+		code = glue.outdent(code, '\t')
+		return q([[
+create procedure ::name ({args})
+begin
+{code}
+end]], {name = name, args = args or '', code = code})
+	end
+
+	function cmd.readd_proc(q, name, ...)
+		if cmd.drop_proc(q, name) then
+			cmd.add_proc(q, name, ...)
+		end
+	end
+
+	function cmd.drop_proc(q, name)
+		return q('drop procedure if exists ??', name)
+	end
+
+	function cmd.add_column(q, tbl, name, type_pos)
+		if cmd.column_exists(q, tbl, name) then return end
+		return q(fmt('alter table ?? add column %s %s', name, type_pos), tbl)
+	end
+
+	function cmd.rename_column(q, tbl, old_name, new_name)
+		if not cmd.column_exists(q, tbl, old_name) then return end
+		return q('alter table ?? rename column ?? to ??', tbl, old_name, new_name)
+	end
+
+	function cmd.readd_fk(q, tbl, col, ...)
+		if cmd.drop_fk(q, tbl, col) then
+			return cmd.add_fk(q, tbl, col, ...)
+		end
+	end
+
+	function cmd.readd_uk(q, tbl, col)
+		if cmd.drop_uk(q, tbl, col) then
+			return cmd.add_uk(q, tbl, col)
+		end
+	end
+
+	function cmd.readd_ix(q, tbl, col)
+		if cmd.drop_ix(q, tbl, col) then
+			return cmd.add_ix(q, tbl, col)
+		end
+	end
 
 end
 
