@@ -604,6 +604,32 @@ end]], {name = name, args = args or '', code = code})
 		end
 	end
 
+	--column locks
+
+	local function column_locks_code(cols)
+		local code = {}
+		for col in cols:gmatch'[^%s]+' do
+			code[#code+1] = fmt([[
+	if new.%s <=> old.%s then
+		signal sqlstate '45000' set message_text = 'Read/only column: %s';
+	end if;
+]], col, col, col)
+		end
+		return concat(code)
+	end
+
+	function cmd.add_column_locks(q, tbl, cols)
+		return cmd.add_trigger(q, 'col_locks', tbl, 'before update', column_locks_code(cols))
+	end
+
+	function cmd.readd_column_locks(q, tbl, cols)
+		return cmd.readd_trigger(q, 'col_locks', tbl, 'before update', column_locks_code(cols))
+	end
+
+	function cmd.drop_column_locks(q, tbl)
+		return cmd.drop_trigger(q, 'col_locks', tbl, 'before update')
+	end
+
 end
 
 function M.package.mysql_domains(pp)
