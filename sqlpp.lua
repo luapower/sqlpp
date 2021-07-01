@@ -586,6 +586,12 @@ end]], {name = name, args = args or '', code = code})
 		return q('alter table ?? rename column ?? to ??', tbl, old_name, new_name)
 	end
 
+	function cmd.drop_column(q, tbl, name)
+		if not pp.allow_drop then return end
+		if not cmd.column_exists(q, tbl, old_name) then return end
+		return q('alter table ?? remove column ??', tbl, name)
+	end
+
 	function cmd.readd_fk(q, tbl, col, ...)
 		if cmd.drop_fk(q, tbl, col) then
 			return cmd.add_fk(q, tbl, col, ...)
