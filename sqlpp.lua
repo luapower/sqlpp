@@ -249,12 +249,12 @@ function M.new()
 
 	local function named_params(sql, t)
 		local names = {}
-		local sql = sql:gsub('::([%w_]+)', function(k)
+		local sql = sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 			add(names, k)
 			local v, err = pp.name(t[k])
 			return assertf(v, 'param %s: %s\n%s', k, err, sql)
 		end)
-		local sql = sql:gsub(':([%w_]+)', function(k)
+		local sql = sql:gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
 			add(names, k)
 			local v, err = pp.value(t[k])
 			return assertf(v, 'param %s: %s\n%s', k, err, sql)
