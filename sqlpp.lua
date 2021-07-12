@@ -293,7 +293,7 @@ function M.new()
 	pp.macro = {}
 
 	local function macro_subst(name, args)
-		local macro = assertf(pp.macro[name], 'invalid macro: %s', name)
+		local macro = assertf(pp.macro[name], 'invalid macro: $%s()', name)
 		args = args:sub(2,-2)..','
 		local t = {}
 		for arg in args:gmatch'([^,]+)' do
@@ -303,8 +303,25 @@ function M.new()
 		return macro(unpack(t))
 	end
 
-	local function pp_macros(sql)
-		--we do this in two steps because we want to be able to yield from gsub.
+	--preprocessor ------------------------------------------------------------
+
+	--TODO: separate multiple queries based on delim and support `delimiter` command.
+
+	function pp.query(sql, t, delim)
+		t = t or glue.empty
+
+		local sql = pp_ifs(sql, t) --#if ... #endif
+
+		--we do macro expansion in two steps because we can't expand a query
+		--after it has been expanded once because we would parse inside string
+		--literals; also because we can't yield from gsub and we want to
+		--support macros that call query() which yields.
+
+		--step 1: collect all macros and replace them with a marker that
+		--string literals can't contain.
+
+		local repl = {}
+
 		local macros = {}
 		local function collect_macro(name, args)
 			add(macros, name)
@@ -312,32 +329,36 @@ function M.new()
 			return '\0' --marker
 		end
 		sql = sql:gsub('$([%w_]+)(%b())', collect_macro) --$foo(arg1,...)
-		local macro_results = {}
+
 		for i = 1, #macros, 2 do
 			local name, args = macros[i], macros[i+1]
-			add(macro_results, macro_subst(name, args) or '')
+			add(repl, macro_subst(name, args) or '')
 		end
+
+		local function collect_define(name)
+			add(repl, assertf(defines[name], '$%s is undefined', name))
+			return '\0' --marker
+		end
+		sql = sql:gsub('$([%w_]+)', collect_define) --$foo
+
+		local function collect_verbatim(name)
+			add(repl, assertf(t[name], '{%s} is missing'))
+			return '\0' --marker
+		end
+		local sql = glue.subst(sql, collect_verbatim) --{foo}
+
+		--step 2: expand params.
+
+		local sql, names = pp.params(sql, t) -- ? ?? :foo :foo
+
+		--step 3: expand markers.
+
 		local i = 0
 		sql = sql:gsub('%z', function()
 			i = i + 1
-			return macro_results[i]
+			return repl[i]
 		end)
-		sql = sql:gsub('$([%w_]+)', defines) --$foo
-		return sql
-	end
 
-	--preprocessor ------------------------------------------------------------
-
-	function pp.query(sql, t, delim)
-		t = t or glue.empty
-		local sql = glue.subst(sql, t) --{foo}
-		local sql = pp_ifs(sql, t) --#if ... #endif
-		local sql = pp_macros(sql) --$foo and $foo(args...)
-		local sqls = {}
-		--TODO: separate multiple queries based on delim and support `delimiter` command.
-		--expanding the values must be the last step because after string
-		--values are expanded, we can't parse with regex anymore.
-		local sql, names = pp.params(sql, t) -- ? ?? :foo :foo
 		return sql, names
 	end
 
