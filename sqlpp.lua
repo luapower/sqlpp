@@ -292,15 +292,24 @@ function M.new()
 
 	pp.macro = {}
 
-	local function macro_subst(name, args)
+	local function macro_arg(arg, t)
+		local k = arg:match'^:([%w_][%w_%:]*)'
+		if k then --unparsed param expansion.
+			return t[k]
+		else --parsed param expansion.
+			return pp.params(arg, t)
+		end
+	end
+
+	local function macro_subst(name, args, t)
 		local macro = assertf(pp.macro[name], 'invalid macro: $%s()', name)
 		args = args:sub(2,-2)..','
-		local t = {}
+		local dt = {}
 		for arg in args:gmatch'([^,]+)' do
 			arg = glue.trim(arg)
-			t[#t+1] = arg
+			dt[#dt+1] = macro_arg(arg, t) --expand params in macro args *unquoted*!
 		end
-		return macro(unpack(t))
+		return macro(unpack(dt))
 	end
 
 	--preprocessor ------------------------------------------------------------
@@ -332,7 +341,7 @@ function M.new()
 
 		for i = 1, #macros, 2 do
 			local name, args = macros[i], macros[i+1]
-			add(repl, macro_subst(name, args) or '')
+			add(repl, macro_subst(name, args, t) or '')
 		end
 
 		local function collect_define(name)
