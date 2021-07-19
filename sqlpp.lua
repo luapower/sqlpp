@@ -302,7 +302,7 @@ function M.new()
 	end
 
 	local function macro_subst(name, args, t)
-		local macro = assertf(pp.macro[name], 'invalid macro: $%s()', name)
+		local macro = assertf(pp.macro[name], 'undefined macro: $%s()', name)
 		args = args:sub(2,-2)..','
 		local dt = {}
 		for arg in args:gmatch'([^,]+)' do
@@ -329,30 +329,30 @@ function M.new()
 		--step 1: collect all macros and replace them with a marker that
 		--string literals can't contain.
 
-		local repl = {}
+		local repl  = {m = {}, d = {}, v = {}}
 
 		local macros = {}
 		local function collect_macro(name, args)
 			add(macros, name)
 			add(macros, args)
-			return '\0' --marker
+			return '\0m' --marker
 		end
 		sql = sql:gsub('$([%w_]+)(%b())', collect_macro) --$foo(arg1,...)
 
 		for i = 1, #macros, 2 do
 			local name, args = macros[i], macros[i+1]
-			add(repl, macro_subst(name, args, t) or '')
+			add(repl.m, macro_subst(name, args, t) or '')
 		end
 
 		local function collect_define(name)
-			add(repl, assertf(defines[name], '$%s is undefined', name))
-			return '\0' --marker
+			add(repl.d, assertf(defines[name], '$%s is undefined', name))
+			return '\0d' --marker
 		end
 		sql = sql:gsub('$([%w_]+)', collect_define) --$foo
 
 		local function collect_verbatim(name)
-			add(repl, assertf(t[name], '{%s} is missing'))
-			return '\0' --marker
+			add(repl.v, assertf(t[name], '{%s} is missing'))
+			return '\0v' --marker
 		end
 		local sql = glue.subst(sql, collect_verbatim) --{foo}
 
@@ -362,10 +362,11 @@ function M.new()
 
 		--step 3: expand markers.
 
-		local i = 0
-		sql = sql:gsub('%z', function()
-			i = i + 1
-			return repl[i]
+		local repln = {m = 0, d = 0, v = 0}
+		sql = sql:gsub('%z(.)', function(k)
+			local i = repln[k] + 1
+			repln[k] = i
+			return repl[k][i]
 		end)
 
 		return sql, names
@@ -482,6 +483,10 @@ function M.package.mysql_ddl(pp)
 		local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
 		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
 			fkname(tbl, col), cols(col), ftbl, cols(fcol or col), a1, a2)
+	end
+
+	function pp.macro.child_fk(tbl, col, ftbl, fcol)
+		return pp.macro.fk(tbl, col, ftbl, fcol, 'cascade')
 	end
 
 	function pp.macro.uk(tbl, col)
@@ -705,18 +710,7 @@ if not ... then
 	local spp = M.new()
 	spp.require'mysql'
 	for _,s in ipairs(spp.queries([[
-#if true
-$create_database(foo);
-#if true
-$drop_table(bar);
-#endif
-$table foo (
-	foo_id    $pk, $fk(t, f, t2, f2),
-	foo_name  $name
-);
-#else
-	bla bla bla
-#endif
+	$id not null, $fk(store_currency, currency, currency),
 ]])) do
 	print(s)
 end
