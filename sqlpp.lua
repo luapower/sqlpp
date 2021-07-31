@@ -20,7 +20,9 @@ local esc = {
 	['\t' ]  = '\\t',
 	['\26']  = '\\Z',
 	['\\' ]  = '\\\\',
-}
+	['\'' ]  = '\\\'',
+	['\"' ]  = '\\"',
+}}
 
 function M.new()
 
@@ -108,7 +110,7 @@ function M.new()
 	local _= pp.keyword.default
 
 	function pp.string(s) --stub
-		return s:gsub('[%z\b\n\r\t\26\\]', esc)
+		return s:gsub('[%z\b\n\r\t\26\\\'"]', esc)
 	end
 
 	function pp.number(x) --stub
@@ -120,8 +122,8 @@ function M.new()
 	end
 
 	function pp.name(v)
-		assert(v, 'names cannot be missing')
-		if v:sub(1, 1) == '`' and v:sub(-1, -1) == '`' then
+		assert(v, 'sql name missing')
+		if v:sub(1, 1) == '`' then
 			return v
 		end
 		return '`'..v..'`'
@@ -415,7 +417,7 @@ function M.package.mysql_quote(pp)
 		return quote_number(v)
 	end
 
-	function pp.boolean(b)
+	function pp.boolean(v)
 		return v and 1 or 0
 	end
 
@@ -684,7 +686,7 @@ function M.package.mysql_domains(pp)
 	pp.subst'url      varchar(2048)'
 	pp.subst'bool     tinyint not null default 0'
 	pp.subst'bool1    tinyint not null default 1'
-	pp.subst'atime    timestamp not null'
+	pp.subst'atime    timestamp not null default current_timestamp'
 	pp.subst'ctime    timestamp not null default current_timestamp'
 	pp.subst'mtime    timestamp not null default current_timestamp on update current_timestamp'
 	pp.subst'money    decimal(20,6)'
