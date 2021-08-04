@@ -30,9 +30,10 @@ function M.new()
 
 	--conditional compilation -------------------------------------------------
 
-	--process #if #elif #else #endif conditionals.
-	--also normalize newlines and remove single-line comments.
-	--NOTE: not removing multiline comments, those are used for hints.
+	--Process #if #elif #else #endif conditionals.
+	--Also normalize newlines and remove single-line comments which the mysql
+	--client protocol cannot parse. Multiline comments are not removed since
+	--they can be used for optimizer hints.
 	local globals_mt = {__index = _G}
 	local function parse_expr(s, params)
 		local f = assert(loadstring('return '..s))
