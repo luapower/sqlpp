@@ -1,8 +1,6 @@
 
 ## `local sqlpp = require'sqlpp'`
 
-SQL Preprocessor, postprocessor and command API.
-
 Preprocessor features:
 
  * `#if #elif #else #endif` conditionals
@@ -16,7 +14,7 @@ Preprocessor features:
 
 ## API Summary
 ----------------------------------------------- ------------------------------
-__preprocessor__
+__Preprocessing queries__
 `sqlpp.new() -> spp`                            create a preprocessor instance
 `spp.query(sql, ...) -> sql, names`             preprocess a query
 `spp.params(sql, [t]) -> sql, names`            substitute named params
@@ -34,11 +32,12 @@ __preprocessor__
 `spp.subst'NAME text...'`                       create a substitution for `$NAME`
 `function spp.macro.NAME(...) end`              create a macro to be used as `$NAME(...)`
 `spp.has_ddl(sql) -> true|false`                check if an expanded query has DDL commands in it
-__post-processor__
+__Post-processing result sets__
 `spp.groups(col, rows|groups) -> groups`        group rows
-__command API__
+`spp.each_group(col, rows|groups) -> iter`      group rows and iterate groups
+__Command API__
 `spp.connect(options) -> cmd`                   make a command API based on a low-level API
-__query execution__
+__Query execution__
 `cmd:query([opt], sql, ...) -> rows`            query
 `cmd:first_row([opt], sql, ...) -> rows`        query and return the first row
 `cmd:each_row([opt], sql, ...) -> iter`         query and iterate rows
@@ -70,12 +69,13 @@ __MDL commands__
 `cmd:insert_rows(tbl, rows, col_map, compact)`  insert rows with one query
 `cmd:update_row(tbl, vals, col_map, [filter])`  update row
 `cmd:delete_row(tbl, vals, col_map, [filter])`  delete row
-__module system__
+__Module system__
 `function sqlpp.package.NAME(spp) end`          extend the preprocessor with a module
 `spp.require(name)`                             load a module into the preprocessor instance
-__modules__
-`spp.require'mysql'`                            MySQL module
-`spp.require'mysql_domains'`                    common type domains for MySQL
+__Modules__
+`require'sqlpp_mysql'`                          load the code for the MySQL module
+`spp.require'mysql'`                            load the MySQL module
+`spp.require'mysql_domains'`                    load common type domains for MySQL
 ----------------------------------------------- ------------------------------
 
 ## Preprocessor
