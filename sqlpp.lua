@@ -582,9 +582,11 @@ function M.new()
 		local fa = opt.field_attrs
 		for i,f in ipairs(fields) do
 			update(f, fa and fa[f.name])
-			if f.origin_table and f.schema and f.schema ~= 'information_schema' then
-				local def = self:table_def(f.schema..'.'..f.origin_table)[f.origin_name]
-				update(f, def)
+			if f.origin_table and f.schema then
+				local tdef = self:table_def(f.schema..'.'..f.origin_table)
+				if tdef then
+					update(f, tdef[f.origin_name])
+				end
 			end
 		end
 		for i = 1, #rows do
@@ -705,14 +707,16 @@ function M.new()
 		if not def then
 			local sch, tbl = sch_tbl_arg(self, sch_tbl)
 			def = self:get_table_def(sch, tbl)
-			cache[sch_tbl] = def
-			for _,field in ipairs(def.fields) do
-				local col = field.name
-				local col_attrs = spp.col_attrs[sch..'.'..tbl..'.'..col]
-				local col_type_attrs = spp.col_type_attrs[field.type]
-				local col_name_attrs = spp.col_name_attrs[col]
-				update(field, col_attrs, col_type_attrs, col_name_attrs)
-				def.fields[col] = field
+			if def then
+				cache[sch_tbl] = def
+				for _,field in ipairs(def.fields) do
+					local col = field.name
+					local col_attrs = spp.col_attrs[sch..'.'..tbl..'.'..col]
+					local col_type_attrs = spp.col_type_attrs[field.type]
+					local col_name_attrs = spp.col_name_attrs[col]
+					update(field, col_attrs, col_type_attrs, col_name_attrs)
+					def.fields[col] = field
+				end
 			end
 		end
 		return def

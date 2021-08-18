@@ -14,6 +14,46 @@ local repl = glue.repl
 local outdent = glue.outdent
 local sortedpairs = glue.sortedpairs
 
+local native_num_range = {
+	tinyint   = {-127, 127, 0, 255},
+	shortint  = {-32768, 32767, 0, 65535},
+	mediumint = {-2^23, 2^23-1, 0, 2^24-1},
+	int       = {-2^31-1, 2^31, 0, 2^32-1},
+	bigint    = {-2^63-1, 2^63, 0, 2^64-1},
+	float     = {-3.4e+38, 3.4e+38},
+	double    = {-1.7e+308, 1.7e+308},
+}
+
+local mysql_charsize = {
+	utf8    = 3,
+	utf8mb4 = 4,
+}
+
+--[[
+
+	if f.type == 'number' then
+		if t.type ~= 'float' and t.type ~= 'double' then
+			f.multiple_of = 1 / 10^t.decimals
+		end
+	elseif not f.type then
+		f.maxlen = t.length * (mysql_charsize[t.charset] or 1)
+	end
+
+	if col.decimals == 0x1f then --float, double
+		col.decimals = nil
+	else
+		col.multiple_of = 1 / 10^col.decimals
+	end
+	local range = native_num_range[col.type]
+	if range then
+		if col.unsigned then
+			col.min, col.max = range[3], range[4]
+		else
+			col.min, col.max = range[1], range[2]
+		end
+	end
+]]
+
 function sqlpp.package.mysql(spp)
 
 	--command API driver ------------------------------------------------------
@@ -186,28 +226,29 @@ function sqlpp.package.mysql(spp)
 
 		local fields, pk, ai_col = {}, {}
 
-		for i,row in self:each_row([[
+		local rows = self:rawquery(fmt([[
 			select
-				c.column_name as col,
-				c.data_type as col_type,
-				c.column_type as full_type,
-				c.column_key as col_key,
-				c.column_default,
-				c.is_nullable,
-				c.extra,
-				c.character_maximum_length as char_len,
-				c.character_octet_length as byte_len,
-				c.numeric_precision as col_precision,
-				c.numeric_scale as col_scale,
-				c.character_set_name as charset_name
+				column_name,
+				data_type,
+				column_type,
+				column_key,
+				column_default,
+				is_nullable,
+				extra,
+				character_maximum_length,
+				character_octet_length,
+				numeric_precision,
+				numeric_scale,
+				character_set_name,
+				collation_name
 			from
-				information_schema.columns c
+				information_schema.columns
 			where
-				c.table_schema = ?
-				and c.table_name = ?
-			]], sch, tbl)
-		do
-			local col = row.col
+				table_schema = %s and table_name = %s
+			]], spp.val(sch), spp.val(tbl)))
+
+		for i,row in ipairs(rows) do
+			local col = row.column_name
 			local is_ai = row.extra == 'auto_increment' or nil
 
 			if is_ai then
@@ -215,24 +256,25 @@ function sqlpp.package.mysql(spp)
 				ai_col = col
 			end
 
-			if row.col_key == 'PRI' then
+			if row.column_key == 'PRI' then
 				pk[#pk+1] = col
 			end
 
 			fields[i] = {
 				name = col,
-				type = row.col_type,
-				enum_values = parse_enum(row.full_type),
+				type = row.data_type,
+				enum_values = parse_enum(row.column_type),
 				has_default = row.col_default ~= nil or nil,
 				default = row.col_default,
 				auto_increment = is_ai,
 				not_null = row.is_nullable == 'NO' or nil,
-				precision = row.col_precision,
-				scale = row.col_scale,
-				unsigned = row.full_type:find' unsigned$' and true or nil,
-				char_len = row.char_len,
-				byte_len = row.byte_len,
-				charset = row.charset,
+				precision = row.numeric_precision,
+				scale = row.numeric_scale,
+				unsigned = row.column_type:find' unsigned$' and true or nil,
+				char_len = row.character_maximum_length,
+				byte_len = row.character_octet_length,
+				charset = row.character_set_name,
+				collation = row.collation_name,
 			}
 		end
 
