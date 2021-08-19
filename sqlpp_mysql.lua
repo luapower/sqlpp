@@ -14,45 +14,13 @@ local repl = glue.repl
 local outdent = glue.outdent
 local sortedpairs = glue.sortedpairs
 
-local native_num_range = {
-	tinyint   = {-127, 127, 0, 255},
-	shortint  = {-32768, 32767, 0, 65535},
-	mediumint = {-2^23, 2^23-1, 0, 2^24-1},
-	int       = {-2^31-1, 2^31, 0, 2^32-1},
-	bigint    = {-2^63-1, 2^63, 0, 2^64-1},
-	float     = {-3.4e+38, 3.4e+38},
-	double    = {-1.7e+308, 1.7e+308},
+local int_ranges = {
+	tinyint   = {-(2^ 7-1), 2^ 7, 0, 2^ 8-1},
+	shortint  = {-(2^15-1), 2^15, 0, 2^16-1},
+	mediumint = {-(2^23-1), 2^23, 0, 2^24-1},
+	int       = {-(2^31-1), 2^31, 0, 2^32-1},
+	bigint    = {-(2^51-1), 2^51, 0, 2^52-1},
 }
-
-local mysql_charsize = {
-	utf8    = 3,
-	utf8mb4 = 4,
-}
-
---[[
-
-	if f.type == 'number' then
-		if t.type ~= 'float' and t.type ~= 'double' then
-			f.multiple_of = 1 / 10^t.decimals
-		end
-	elseif not f.type then
-		f.maxlen = t.length * (mysql_charsize[t.charset] or 1)
-	end
-
-	if col.decimals == 0x1f then --float, double
-		col.decimals = nil
-	else
-		col.multiple_of = 1 / 10^col.decimals
-	end
-	local range = native_num_range[col.type]
-	if range then
-		if col.unsigned then
-			col.min, col.max = range[3], range[4]
-		else
-			col.min, col.max = range[1], range[2]
-		end
-	end
-]]
 
 function sqlpp.package.mysql(spp)
 
@@ -189,11 +157,10 @@ function sqlpp.package.mysql(spp)
 	local function column_locks_code(cols)
 		local code = {}
 		for col in cols:gmatch'[^%s]+' do
-			code[#code+1] = fmt([[
-	if new.%s <=> old.%s then
-		signal sqlstate '45000' set message_text = 'Read/only column: %s';
-	end if;
-]], col, col, col)
+			code[#code+1] = fmt(outdent([[
+				if new.%s <=> old.%s then
+					signal sqlstate '45000' set message_text = 'Read/only column: %s';
+				end if;]], '\t'), col, col, col)
 		end
 		return concat(code)
 	end
@@ -236,7 +203,6 @@ function sqlpp.package.mysql(spp)
 				is_nullable,
 				extra,
 				character_maximum_length,
-				character_octet_length,
 				numeric_precision,
 				numeric_scale,
 				character_set_name,
@@ -248,10 +214,13 @@ function sqlpp.package.mysql(spp)
 			]], spp.val(sch), spp.val(tbl)))
 
 		for i,row in ipairs(rows) do
-			local col = row.column_name
-			local is_ai = row.extra == 'auto_increment' or nil
 
-			if is_ai then
+			local col = row.column_name
+			local type = row.data_type
+			local auto_increment = row.extra == 'auto_increment' or nil
+			local unsigned = row.column_type:find' unsigned$' and true or nil
+
+			if auto_increment then
 				assert(not ai_col)
 				ai_col = col
 			end
@@ -260,21 +229,41 @@ function sqlpp.package.mysql(spp)
 				pk[#pk+1] = col
 			end
 
+			local min, max, decimals
+			if type == 'decimal' then
+				local digits = row.numeric_precision
+				decimals = row.numeric_scale
+				max = 10^(digits - decimals) - 1 / 10^decimals
+				min = unsigned and 0 or -max --unsigned decimals is deprecated!
+			else
+				local range = int_ranges[type]
+				if range then
+					decimals = 0
+					if unsigned then
+						min, max = range[3], range[4]
+					else
+						min, max = range[1], range[2]
+					end
+				end
+			end
+
 			fields[i] = {
 				name = col,
-				type = row.data_type,
+				type = type,
 				enum_values = parse_enum(row.column_type),
-				has_default = row.col_default ~= nil or nil,
-				default = row.col_default,
-				auto_increment = is_ai,
+				default = row.column_default,
+				auto_increment = auto_increment,
 				not_null = row.is_nullable == 'NO' or nil,
-				precision = row.numeric_precision,
-				scale = row.numeric_scale,
-				unsigned = row.column_type:find' unsigned$' and true or nil,
-				char_len = row.character_maximum_length,
-				byte_len = row.character_octet_length,
+				min = min,
+				max = max,
+				decimals = decimals,
+				unsigned = unsigned,
+				maxlen = row.character_maximum_length,
 				charset = row.character_set_name,
 				collation = row.collation_name,
+				pri_key    = row.column_key == 'PRI' or nil,
+				unique_key = row.column_key == 'UNI' or nil,
+				indexed    = row.column_key == 'MUL' or nil,
 			}
 		end
 

@@ -15,6 +15,7 @@ local repl = glue.repl
 local attr = glue.attr
 local update = glue.update
 local empty = glue.empty
+local names = glue.names
 
 local M = {package = {}}
 
@@ -551,31 +552,7 @@ function M.new()
 		return self
 	end
 
-	function cmd:convert_row(rows, i, fields, opt)
-		local fa = opt.field_attrs
-		if not fa then
-			return
-		end
-		for col, fa in pairs(field_attrs) do
-			local convert = fa.to_lua
-			if convert then
-				local v
-				if #fields == 1 and opt.to_array then
-					rows[i] = convert(rows[i])
-				elseif opt.compact then
-					local row = rows[i]
-					local fi = fields[col].index
-					row[fi] = convert(row[fi])
-				else
-					local row = rows[i]
-					local fi = fields[col].name
-					row[fi] = convert(row[fi])
-				end
-			end
-		end
-	end
-
-	function cmd:convert_rows(rows, fields, opt)
+	function process_result(self, rows, fields, opt)
 		if not fields then --not a select query.
 			return
 		end
@@ -585,12 +562,27 @@ function M.new()
 			if f.origin_table and f.schema then
 				local tdef = self:table_def(f.schema..'.'..f.origin_table)
 				if tdef then
-					update(f, tdef[f.origin_name])
+					update(f, tdef.fields[f.origin_name])
 				end
 			end
 		end
-		for i = 1, #rows do
-			self:convert_row(rows, i, fields, opt)
+		for i,f in ipairs(fields) do
+			local convert = f.to_lua
+			if convert then
+				for i = 1, #rows do
+					if #fields == 1 and opt.to_array then
+						rows[i] = convert(rows[i])
+					elseif opt.compact then
+						local row = rows[i]
+						local fi = fields[col].index
+						row[fi] = convert(row[fi])
+					else
+						local row = rows[i]
+						local fi = fields[col].name
+						row[fi] = convert(row[fi])
+					end
+				end
+			end
 		end
 	end
 
@@ -616,12 +608,12 @@ function M.new()
 					return pass(results, self:rawagain(opt))
 				else
 					for _,res in ipairs(results) do
-						self:convert_rows(res[1], res[2], opt)
+						process_result(self, res[1], res[2], opt)
 					end
 					return results
 				end
 			else
-				self:convert_rows(rows, fields, opt)
+				process_result(self, rows, fields, opt)
 				return rows, fields, param_names
 			end
 		end
@@ -952,6 +944,9 @@ function M.new()
 		return self:query({parse = false}, sql)
 	end
 
+	--NOTE: The returned insert_id is that of the first inserted row.
+	--You do the math for the other rows, they should be consecutive even
+	--while other inserts are happening at the same time but I'm not sure.
 	function cmd:insert_rows(tbl, rows, col_map, compact)
 		if #rows == 0 then
 			return
@@ -970,6 +965,13 @@ function M.new()
 				%s
 		]], spp.name(tbl), cols_sql, rows_sql)
 		return pass(self:query({parse = false}, sql))
+	end
+
+	function cmd:update_from_select(vals, select_fields, update_tables)
+		for i,tbl in names(update_tables) do
+			local tdef = self:table_def(tbl)
+			--select_fields
+		end
 	end
 
 	return spp
