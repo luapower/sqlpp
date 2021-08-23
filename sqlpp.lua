@@ -257,10 +257,15 @@ function M.new()
 
 	--preprocessor ------------------------------------------------------------
 
-	function spp.query(sql, ...)
-
+	local function args_params(...)
 		local args = select('#', ...) > 0 and {...} or empty
 		local params = type((...)) == 'table' and (...) or empty
+		return args, params
+	end
+
+	local function spp_query(prepare, sql, ...)
+
+		local args, params = args_params(...)
 
 		if not sql:find'[#$:?{%-;]' then --nothing to see here
 			return sql, empty
@@ -310,6 +315,8 @@ function M.new()
 				return '\0'..char(#repl)
 			end) --{foo}
 
+		local param_map = prepare and {}
+
 		--collect named params
 		sql = sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 				add(param_names, k)
@@ -318,8 +325,13 @@ function M.new()
 				return '\0'..char(#repl)
 			end):gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
 				add(param_names, k)
-				local v, err = spp.val(params[k])
-				add(repl, assertf(v, 'param %s: %s', k, err))
+				if prepare then
+					add(param_map, k)
+					add(repl, '?')
+				else
+					local v, err = opt and opt.prepare and '?' or spp.val(params[k])
+					add(repl, assertf(v, 'param %s: %s', k, err))
+				end
 				return '\0'..char(#repl)
 			end)
 
@@ -332,8 +344,13 @@ function M.new()
 				return '\0'..char(#repl)
 			end):gsub('%?', function() -- ?
 				i = i + 1
-				local v, err = spp.val(args[i])
-				add(repl, assertf(v, 'param %d: %s', i, err))
+				if prepare then
+					add(param_map, i)
+					add(repl, '?')
+				else
+					local v, err = spp.val(args[i])
+					add(repl, assertf(v, 'param %d: %s', i, err))
+				end
 				return '\0'..char(#repl)
 			end)
 
@@ -347,7 +364,29 @@ function M.new()
 			return repl[i]
 		end)
 
-		return sql, param_names
+		return sql, param_names, param_map
+	end
+
+	function spp.query(sql, ...)
+		return spp_query(nil, sql, ...)
+	end
+
+	function spp.prepare(sql, ...)
+		return spp_query(true, sql, ...)
+	end
+
+	function spp.map_params(param_map, ...)
+		local args, params = args_params(...)
+		local t = {}
+		for i,k in ipairs(param_map) do
+			if type(k) == 'number' then --arg
+				t[i] = args[k]
+			else --param
+				t[i] = params[k]
+			end
+			t.n = i
+		end
+		return t
 	end
 
 	--TODO: this gives false positives (but no false negatives which is what we want).
@@ -548,11 +587,11 @@ function M.new()
 
 	function spp.connect(opt)
 		local self = update({p = spp}, cmd)
-		self:rawconnect(opt)
+		self:assert(self:rawconnect(opt))
 		return self
 	end
 
-	function process_result(self, rows, fields, opt)
+	function process_result_set(self, rows, fields, opt)
 		if not fields then --not a select query.
 			return
 		end
@@ -586,6 +625,27 @@ function M.new()
 		end
 	end
 
+	local function get_result_sets(self, results, opt, param_names, ret, ...)
+		if not ret then return ret, ... end --error
+		local rows, again, fields = ret, ...
+		results = results or (again and {param_names = param_names}) or nil
+		if results then
+			add(results, {rows, fields})
+			if again then
+				return get_result_sets(self, results, opt, param_names,
+					self:assert(self:rawagain(opt)))
+			else
+				for _,res in ipairs(results) do
+					process_result_set(self, res[1], res[2], opt)
+				end
+				return results
+			end
+		else
+			process_result_set(self, rows, fields, opt)
+			return rows, fields, param_names
+		end
+	end
+
 	function cmd:query(opt, sql, ...)
 		if type(opt) ~= 'table' then --sql, ...
 			return self:query(empty, opt, sql, ...)
@@ -596,31 +656,38 @@ function M.new()
 		if opt.parse ~= false then
 			sql, param_names = spp.query(sql, ...)
 		end
-		local function pass(results, ret, ...)
-			if not ret then --error
-				return ret, ...
-			end
-			local rows, again, fields = ret, ...
-			results = results or (again and {param_names = param_names}) or nil
-			if results then
-				add(results, {rows, fields})
-				if again then
-					return pass(results, self:rawagain(opt))
-				else
-					for _,res in ipairs(results) do
-						process_result(self, res[1], res[2], opt)
-					end
-					return results
-				end
-			else
-				process_result(self, rows, fields, opt)
-				return rows, fields, param_names
-			end
-		end
 		if spp.has_ddl(sql) then
 			self:schema_changed()
 		end
-		return pass(nil, self:rawquery(sql, opt))
+		return get_result_sets(self, nil, opt, param_names,
+			self:assert(self:rawquery(sql, opt)))
+	end
+
+	function cmd:prepare(opt, sql, ...)
+		if type(opt) ~= 'table' then --sql, ...
+			return self:prepare(empty, opt, sql, ...)
+		elseif type(sql) == 'table' then --opt1, opt2, sql, ...
+			return self:prepare(update(opt, sql), ...)
+		end
+		local param_names, param_map
+		if opt.parse ~= false then
+			sql, param_names, param_map = spp.prepare(sql, ...)
+		end
+		local cmd = self
+		local function pass(rawstmt, ...)
+			if not rawstmt then return nil, ... end
+			local stmt = {}
+			function stmt:free()
+				return cmd:rawstmt_free(rawstmt)
+			end
+			function stmt:exec(...)
+				local t = spp.map_params(param_map, ...)
+				return get_result_sets(cmd, nil, opt, param_names,
+					cmd:assert(cmd:rawstmt_query(rawstmt, opt, unpack(t, 1, t.n))))
+			end
+			return stmt, param_names
+		end
+		return pass(self:assert(self:rawprepare(sql, opt)))
 	end
 
 	local function pass(rows, ...)

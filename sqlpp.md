@@ -39,6 +39,8 @@ __Command API__
 `spp.connect(options) -> cmd`                   make a command API based on a low-level API
 __Query execution__
 `cmd:query([opt], sql, ...) -> rows`            query
+`cmd:prepare([opt], sql, ...) -> stmt`          prepare query
+`stmt:query(...) -> rows`                       exec prepared query
 `cmd:first_row([opt], sql, ...) -> rows`        query and return the first row
 `cmd:each_row([opt], sql, ...) -> iter`         query and iterate rows
 `cmd:each_row_vals([opt], sql, ...)-> iter`     query and iterate rows unpacked

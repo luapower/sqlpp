@@ -28,19 +28,34 @@ function sqlpp.package.mysql(spp)
 
 	local cmd = spp.command
 
-	function cmd:rawconnect(opt)
-		local cn = assert(mysql:new())
-		self:assert(cn:connect(opt))
+	local function pass(self, cn, ...)
+		if not cn then return cn, ... end
 		self.dbname = opt and opt.database
 		self._conn = cn
+		return cn
+	end
+	function cmd:rawconnect(opt)
+		return pass(self, mysql.connect(opt))
 	end
 
 	function cmd:rawquery(sql, opt)
-		return self:assert(self._conn:query(sql, opt))
+		return self._conn:query(sql, opt)
 	end
 
 	function cmd:rawagain(opt)
-		return self:assert(self._conn:read_result(opt))
+		return self._conn:read_result(opt)
+	end
+
+	function cmd:rawprepare(sql, opt)
+		return self._conn:prepare(sql, opt)
+	end
+
+	function cmd:rawstmt_query(rawstmt, opt, ...)
+		return rawstmt:query(opt, ...)
+	end
+
+	function cmd:rawstmt_free(rawstmt)
+		rawstmt:free()
 	end
 
 	--mysql-specific quoting --------------------------------------------------
@@ -333,8 +348,13 @@ if not ... then
 			pp(cmd:table_def'usr')
 		end
 
-		if true then
+		if false then
 			pp(cmd:query'select * from val limit 1; select * from attr limit 1')
+		end
+
+		if true then
+			local stmt = assert(cmd:prepare('select * from val where val = :val'))
+			pp(stmt:exec{val = 2})
 		end
 
 		if false then
