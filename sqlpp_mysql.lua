@@ -367,7 +367,6 @@ if not ... then
 			password = 'abcd12',
 			database = 'sp',
 			collation = 'server',
-			--charset = 'utf8mb4',
 		}
 
 		if false then
