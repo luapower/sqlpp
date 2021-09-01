@@ -22,6 +22,8 @@ local M = {package = {}}
 function M.new()
 
 	local spp = {}
+	local cmd = {}
+	spp.command = cmd
 
 	--parsing string literals -------------------------------------------------
 
@@ -142,15 +144,15 @@ function M.new()
 	local _ = spp.keyword.null
 	local _ = spp.keyword.default
 
-	function spp.string(s)
-		return "'"..spp.quote(s).."'"
+	function cmd:sqlstring(s)
+		return "'"..self:quote(s).."'"
 	end
 
-	function spp.number(x) --stub
+	function cmd:sqlnumber(x) --stub
 		return fmt('%0.17g', x) --max precision, min length.
 	end
 
-	function spp.boolean(v) --stub
+	function cmd:sqlboolean(v) --stub
 		return tostring(v)
 	end
 
@@ -158,7 +160,7 @@ function M.new()
 	local function add_ticks(s)
 		return '`'..s..'`'
 	end
-	function spp.name(s)
+	function cmd:sqlname(s)
 		assert(s, 'sql name missing')
 		if s:sub(1, 1) == '`' then
 			return s
@@ -166,23 +168,23 @@ function M.new()
 		return s:gsub('[^%.]+', add_ticks)
 	end
 
-	function spp.val(v, field)
+	function cmd:sqlval(v, field)
 		local to_sql = field and field.to_sql
 		if to_sql then
 			return to_sql(v)
 		elseif v == nil then
 			return 'null'
 		elseif type(v) == 'number' then
-			return spp.number(v)
+			return self:sqlnumber(v)
 		elseif type(v) == 'string' then
-			return spp.string(v)
+			return self:sqlstring(v)
 		elseif type(v) == 'boolean' then
-			return spp.boolean(v)
+			return self:sqlboolean(v)
 		elseif type(v) == 'table' then
 			if #v > 0 then --list: for use in `in (?)`
 				local t = {}
 				for i,v in ipairs(v) do
-					t[i] = spp.val(v, field)
+					t[i] = self:sqlval(v, field)
 				end
 				return concat(t, ', ')
 			else --empty list: good for 'in (?)' but NOT GOOD for `not in (?)` !!!
@@ -207,50 +209,50 @@ function M.new()
 
 	spp.macro = {}
 
-	local function macro_arg(arg, t)
+	local function macro_arg(self, arg, t)
 		local k = arg:match'^:([%w_][%w_%:]*)'
 		if k then --unparsed param expansion.
 			return t[k]
 		else --parsed param expansion.
-			return spp.params(arg, t)
+			return self:sqlparams(arg, t)
 		end
 	end
 
-	local function macro_subst(name, args, t)
+	local function macro_subst(self, name, args, t)
 		local macro = assertf(spp.macro[name], 'undefined macro: $%s()', name)
 		args = args:sub(2,-2)..','
 		local dt = {}
 		for arg in args:gmatch'([^,]+)' do
 			arg = glue.trim(arg)
-			dt[#dt+1] = macro_arg(arg, t) --expand params in macro args *unquoted*!
+			dt[#dt+1] = macro_arg(self, arg, t) --expand params in macro args *unquoted*!
 		end
 		return macro(unpack(dt))
 	end
 
 	--named params & positional args substitution -----------------------------
 
-	function spp.params(sql, vals)
+	function cmd:sqlparams(sql, vals)
 		local names = {}
 		return sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 				add(names, k)
-				local v, err = spp.name(vals[k])
+				local v, err = self:sqlname(vals[k])
 				return assertf(v, 'param %s: %s\n%s', k, err, sql)
 			end):gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
 				add(names, k)
-				local v, err = spp.val(vals[k])
+				local v, err = self:sqlval(vals[k])
 				return assertf(v, 'param %s: %s\n%s', k, err, sql)
 			end), names
 	end
 
-	function spp.args(sql, vals)
+	function cmd:sqlargs(sql, vals)
 		local i = 0
 		return (sql:gsub('%?%?', function() -- ??
 				i = i + 1
-				local v, err = spp.name(vals[i])
+				local v, err = self:sqlname(vals[i])
 				return assertf(v, 'param %d: %s\n%s', i, err, sql)
 			end):gsub('%?', function() -- ?
 				i = i + 1
-				local v, err = spp.val(vals[i])
+				local v, err = self:sqlval(vals[i])
 				return assertf(v, 'param %d: %s\n%s', i, err, sql)
 			end))
 	end
@@ -263,7 +265,7 @@ function M.new()
 		return args, params
 	end
 
-	local function spp_query(prepare, sql, ...)
+	local function sqlquery(self, prepare, sql, ...)
 
 		local args, params = args_params(...)
 
@@ -297,7 +299,7 @@ function M.new()
 			end) --$foo(arg1,...)
 		for i = 1, #macros, 2 do
 			local m_name, m_args = macros[i], macros[i+1]
-			add(repl, macro_subst(m_name, m_args, params) or '')
+			add(repl, macro_subst(self, m_name, m_args, params) or '')
 		end
 
 		--collect defines
@@ -320,7 +322,7 @@ function M.new()
 		--collect named params
 		sql = sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 				add(param_names, k)
-				local v, err = spp.name(params[k])
+				local v, err = self:sqlname(params[k])
 				add(repl, assertf(v, 'param %s: %s', k, err))
 				return '\0'..char(#repl)
 			end):gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
@@ -329,7 +331,7 @@ function M.new()
 					add(param_map, k)
 					add(repl, '?')
 				else
-					local v, err = opt and opt.prepare and '?' or spp.val(params[k])
+					local v, err = opt and opt.prepare and '?' or self:sqlval(params[k])
 					add(repl, assertf(v, 'param %s: %s', k, err))
 				end
 				return '\0'..char(#repl)
@@ -339,7 +341,7 @@ function M.new()
 		local i = 0
 		sql = sql:gsub('%?%?', function() -- ??
 				i = i + 1
-				local v, err = spp.name(args[i])
+				local v, err = self:sqlname(args[i])
 				add(repl, assertf(v, 'param %d: %s', i, err))
 				return '\0'..char(#repl)
 			end):gsub('%?', function() -- ?
@@ -348,7 +350,7 @@ function M.new()
 					add(param_map, i)
 					add(repl, '?')
 				else
-					local v, err = spp.val(args[i])
+					local v, err = self:sqlval(args[i])
 					add(repl, assertf(v, 'param %d: %s', i, err))
 				end
 				return '\0'..char(#repl)
@@ -367,12 +369,12 @@ function M.new()
 		return sql, param_names, param_map
 	end
 
-	function spp.query(sql, ...)
-		return spp_query(nil, sql, ...)
+	function cmd:sqlquery(sql, ...)
+		return sqlquery(self, nil, sql, ...)
 	end
 
-	function spp.prepare(sql, ...)
-		return spp_query(true, sql, ...)
+	function cmd:sqlprepare(sql, ...)
+		return sqlquery(self, true, sql, ...)
 	end
 
 	function spp.map_params(param_map, ...)
@@ -390,7 +392,7 @@ function M.new()
 	end
 
 	--TODO: this gives false positives (but no false negatives which is what we want).
-	function spp.has_ddl(sql)
+	function cmd:has_ddl(sql)
 		sql = glue.trim(sql):lower()
 		return
 		      sql:find'^create%s'
@@ -408,7 +410,7 @@ function M.new()
 
 	--row list formatting -----------------------------------------------------
 
-	function spp.rows(rows, opt) --{{v1,...},...} -> '(v1,...),\n (v2,...)'
+	function cmd:sqlrows(rows, opt) --{{v1,...},...} -> '(v1,...),\n (v2,...)'
 		local max_sizes = {}
 		local pad_dirs = {}
 		local srows = {}
@@ -441,7 +443,7 @@ function M.new()
 				pad_dirs[i] = type(v) == 'number' and 'l' or 'r'
 				local col = as_col_map[as_col]
 				local field = opt.fields and opt.fields[col]
-				local s = spp.val(v, field)
+				local s = self:sqlval(v, field)
 				srow[i] = s
 				max_sizes[i] = math.max(max_sizes[i] or 0, #s)
 			end
@@ -513,8 +515,8 @@ function M.new()
 		return rows
 	end
 
-	function spp.tsv(t, s)
-		return spp.rows(spp.tsv_rows(t, s), t.rows)
+	function cmd:sqltsv(t, s)
+		return self:sqlrows(spp.tsv_rows(t, s), t.rows)
 	end
 
 	--row grouping ------------------------------------------------------------
@@ -571,23 +573,33 @@ function M.new()
 
 	--command API -------------------------------------------------------------
 
-	local cmd = {}
-	spp.command = cmd
+	spp.errno = {} --{errno->f(err)}
 
 	function cmd:assert(ret, ...)
 		if ret ~= nil then
 			return ret, ...
 		end
-		local err, errno, sqlstate = ...
-		errors.raise('db', {err = err, errno = errno, sqlstate = sqlstate, addtraceback = true},
-			'%s%s%s', err,
+		local msg, errno, sqlstate = ...
+		local err = errors.new('db',
+			{
+				sqlcode = errno,
+				sqlstate = sqlstate,
+				addtraceback = true,
+			},
+			'%s%s%s', msg,
 				errno and ' ['..errno..']' or '',
-				sqlstate and ' '..sqlstate or '')
+				sqlstate and ' '..sqlstate or ''
+		)
+		local parse = spp.errno[errno]
+		if parse then
+			parse(err)
+		end
+		errors.raise(err)
 	end
 
 	function spp.connect(opt)
-		local self = update({p = spp}, cmd)
-		self:assert(self:rawconnect(opt))
+		local self = update({}, cmd)
+		self.rawconn = self:assert(self:rawconnect(opt))
 		return self
 	end
 
@@ -626,7 +638,7 @@ function M.new()
 	end
 
 	local function get_result_sets(self, results, opt, param_names, ret, ...)
-		if not ret then return ret, ... end --error
+		if ret == nil then return nil, ... end --error
 		local rows, again, fields = ret, ...
 		results = results or (again and {param_names = param_names}) or nil
 		if results then
@@ -654,9 +666,9 @@ function M.new()
 		end
 		local param_names
 		if opt.parse ~= false then
-			sql, param_names = spp.query(sql, ...)
+			sql, param_names = self:sqlquery(sql, ...)
 		end
-		if spp.has_ddl(sql) then
+		if self:has_ddl(sql) then
 			self:schema_changed()
 		end
 		return get_result_sets(self, nil, opt, param_names,
@@ -671,11 +683,11 @@ function M.new()
 		end
 		local param_names, param_map
 		if opt.parse ~= false then
-			sql, param_names, param_map = spp.prepare(sql, ...)
+			sql, param_names, param_map = self:sqlprepare(sql, ...)
 		end
 		local cmd = self
 		local function pass(rawstmt, ...)
-			if not rawstmt then return nil, ... end
+			if rawstmt == nil then return nil, ... end
 			local stmt = {}
 			function stmt:free()
 				return cmd:rawstmt_free(rawstmt)
@@ -848,8 +860,8 @@ function M.new()
 				#endif
 			]], {
 				name = name,
-				charset = charset or spp.default_charset,
-				collation = collation or spp.default_collation,
+				charset = charset,
+				collation = collation,
 			})
 	end
 
@@ -889,17 +901,17 @@ function M.new()
 	function cmd:add_fk(tbl, col, ftbl, ...)
 		if self:index_exists(fkname(tbl, col)) then return end
 		return self:query('alter table ?? add ' ..
-			spp.macro.fk(spp.name(tbl), col, spp.name(ftbl), ...), tbl)
+			spp.macro.fk(self:sqlname(tbl), col, self:sqlname(ftbl), ...), tbl)
 	end
 
 	function cmd:add_uk(tbl, col)
 		if self:index_exists(ukname(tbl, col)) then return end
-		return self:query('alter table ?? add ' .. spp.macro.uk(spp.name(tbl), col), tbl)
+		return self:query('alter table ?? add ' .. spp.macro.uk(self:sqlname(tbl), col), tbl)
 	end
 
 	function cmd:add_ix(tbl, col)
 		if self:index_exists(ixname(tbl, col)) then return end
-		return self:query('alter table ?? add ' .. spp.macro.ix(spp.name(tbl), col), tbl)
+		return self:query('alter table ?? add ' .. spp.macro.ix(self:sqlname(tbl), col), tbl)
 	end
 
 	local function drop_index(self, type, tbl, col)
@@ -936,7 +948,7 @@ function M.new()
 
 	--MDL commands ------------------------------------------------------------
 
-	function where_sql(vals, col_map, pk, field_map, security_filter)
+	function where_sql(self, vals, col_map, pk, field_map, security_filter)
 		local t = {}
 		for i, col in ipairs(pk) do
 			local val_name = col_map[col]
@@ -944,7 +956,7 @@ function M.new()
 			assert(v ~= nil)
 			local field = field_map[col]
 			if i > 1 then add(t, ' and ') end
-			add(t, spp.name(col)..' = '..spp.val(v, field))
+			add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
 		end
 		local sql = concat(t)
 		if security_filter then
@@ -956,13 +968,13 @@ function M.new()
 		return sql
 	end
 
-	local function set_sql(vals, col_map, field_map)
+	local function set_sql(self, vals, col_map, field_map)
 		local t = {}
 		for col, val_name in sortedpairs(col_map) do
 			local v = vals[val_name]
 			if v ~= nil then
 				local field = field_map[col]
-				add(t, spp.name(col)..' = '..spp.val(v, field))
+				add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
 			end
 		end
 		return #t > 0 and concat(t, ',\n\t')
@@ -977,12 +989,12 @@ function M.new()
 		local set_sql = set_sql(vals, col_map, tdef.fields)
 		local sql
 		if not set_sql then --no fields, special syntax.
-			sql = fmt('insert into %s values ()', spp.name(tbl))
+			sql = fmt('insert into %s values ()', self:sqlname(tbl))
 		else
 			sql = fmt(outdent[[
 				insert into %s set
 					%s
-			]], spp.name(tbl), set_sql)
+			]], self:sqlname(tbl), set_sql)
 		end
 		return pass(self:query({parse = false}, sql))
 	end
@@ -998,7 +1010,7 @@ function M.new()
 			update %s set
 				%s
 			where %s
-		]], spp.name(tbl), set_sql, where_sql)
+		]], self:sqlname(tbl), set_sql, where_sql)
 		return self:query({parse = false}, sql)
 	end
 
@@ -1007,7 +1019,7 @@ function M.new()
 		local where_sql = where_sql(vals, col_map, tdef.pk, tdef.fields, security_filter)
 		local sql = fmt(outdent[[
 			delete from %s where %s
-		]], spp.name(tbl), where_sql)
+		]], self:sqlname(tbl), where_sql)
 		return self:query({parse = false}, sql)
 	end
 
@@ -1019,18 +1031,22 @@ function M.new()
 			return
 		end
 		local tdef = self:table_def(tbl)
-		local rows_sql = spp.rows(rows, {
+		local rows_sql = self:sqlrows(rows, {
 			col_map = col_map,
 			fields = tdef.fields,
 			compact = compact,
 		})
-		local cols_sql = concat(glue.map(glue.keys(col_map, true), spp.name), ', ')
+		local t = {}
+		for i,s in ipairs(glue.keys(col_map, true)) do
+			t[i] = self:sqlname(s)
+		end
+		local cols_sql = concat(t, ', ')
 		local sql = fmt(outdent[[
 			insert into %s
 				(%s)
 			values
 				%s
-		]], spp.name(tbl), cols_sql, rows_sql)
+		]], self:sqlname(tbl), cols_sql, rows_sql)
 		return pass(self:query({parse = false}, sql))
 	end
 

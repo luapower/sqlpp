@@ -31,23 +31,22 @@ function sqlpp.package.mysql(spp)
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
 		self.dbname = opt and opt.database
-		self._conn = cn
+		function self:quote(s)
+			return cn:quote(s)
+		end
+		function self:rawquery(sql, opt)
+			return cn:query(sql, opt)
+		end
+		function self:rawagain(opt)
+			return cn:read_result(opt)
+		end
+		function self:rawprepare(sql, opt)
+			return cn:prepare(sql, opt)
+		end
 		return cn
 	end
 	function cmd:rawconnect(opt)
 		return pass(self, mysql.connect(opt))
-	end
-
-	function cmd:rawquery(sql, opt)
-		return self._conn:query(sql, opt)
-	end
-
-	function cmd:rawagain(opt)
-		return self._conn:read_result(opt)
-	end
-
-	function cmd:rawprepare(sql, opt)
-		return self._conn:prepare(sql, opt)
 	end
 
 	function cmd:rawstmt_query(rawstmt, opt, ...)
@@ -60,26 +59,19 @@ function sqlpp.package.mysql(spp)
 
 	--mysql-specific quoting --------------------------------------------------
 
-	spp.quote = mysql.quote
-
-	local quote_number = spp.number
-	function spp.number(v)
+	local sqlnumber = cmd.sqlnumber
+	function cmd:sqlnumber(v)
 		if v ~= v or v == 1/0 or v == -1/0 then
 			return 'null' --avoid syntax error for what ends up as null anyway.
 		end
-		return quote_number(v)
+		return sqlnumber(self, v)
 	end
 
-	function spp.boolean(v)
+	function cmd:sqlboolean(v)
 		return v and 1 or 0
 	end
 
 	--DDL commands ------------------------------------------------------------
-
-	--database defaults charset & collation
-
-	spp.default_charset = 'utf8mb4'
-	spp.default_collation = 'utf8mb4_unicode_ci'
 
 	--existence tests for indices and columns
 
@@ -226,7 +218,7 @@ function sqlpp.package.mysql(spp)
 				information_schema.columns
 			where
 				table_schema = %s and table_name = %s
-			]], spp.val(sch), spp.val(tbl)))
+			]], self:sqlval(sch), self:sqlval(tbl)))
 
 		for i,row in ipairs(rows) do
 
@@ -285,6 +277,38 @@ function sqlpp.package.mysql(spp)
 		return {fields = fields, pk = pk, ai_col = ai_col}
 	end
 
+	--error message parsing
+
+	spp.errno[1364] = function(err)
+		err.col = err.message:match"'(.-)'"
+		err.code = 'required'
+	end
+
+	spp.errno[1048] = function(err)
+		err.col = err.message:match"'(.-)'"
+		err.code = 'not_null'
+	end
+
+	spp.errno[1062] = function(err)
+		local pri = err.message:find"for key '.-%.PRIMARY'"
+		err.code = pri and 'pk' or 'uk'
+	end
+
+	local function dename(s)
+		return s:gsub('`', '')
+	end
+	local function errno_fk(err)
+		local tbl, col, fk_tbl, fk_col =
+			err.message:match"%((.-), CONSTRAINT .- FOREIGN KEY %((.-)%) REFERENCES (.-) %((.-)%)"
+		err.tbl = dename(tbl)
+		err.col = dename(col)
+		err.fk_tbl = dename(fk_tbl)
+		err.fk_col = dename(fk_col)
+		err.code = 'fk'
+	end
+	spp.errno[1451] = errno_fk --can't delete
+	spp.errno[1452] = errno_fk --can't add/update
+
 end
 
 function sqlpp.package.mysql_domains(spp)
@@ -342,19 +366,25 @@ if not ... then
 			user = 'root',
 			password = 'abcd12',
 			database = 'sp',
+			collation = 'server',
+			--charset = 'utf8mb4',
 		}
 
 		if false then
 			pp(cmd:table_def'usr')
 		end
 
-		if false then
+		if true then
 			pp(cmd:query'select * from val limit 1; select * from attr limit 1')
 		end
 
-		if true then
+		if false then
 			local stmt = assert(cmd:prepare('select * from val where val = :val'))
 			pp(stmt:exec{val = 2})
+		end
+
+		if false then
+			pp(cmd:query'insert into val (val, attr) values (100000000, 10000000)')
 		end
 
 		if false then

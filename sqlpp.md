@@ -14,29 +14,18 @@ Preprocessor features:
 
 ## API Summary
 ----------------------------------------------- ------------------------------
-__Preprocessing queries__
 `sqlpp.new() -> spp`                            create a preprocessor instance
-`spp.query(sql, ...) -> sql, names`             preprocess a query
-`spp.params(sql, [t]) -> sql, names`            substitute named params
-`spp.args(sql, ...) -> sql`                     substitute positional args
-`spp.string(s) -> s`                            format string literal
-`spp.number(x) -> s`                            format number literal
-`spp.boolean(v) -> s`                           format boolean literal
-`spp.name(s) -> s`                              format name: `'foo.bar'` -> `'`foo`.`bar`'`
-`spp.val(v[, field]) -> s`                      format any value
-`spp.rows(rows[, indent]) -> s`                 format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
+`spp.connect(options) -> cmd`                   connect to a database
+__Preprocessing__
+`cmd:sqlquery(sql, ...) -> sql, names`          preprocess a query
+`cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query leaving `?` placeholders
+`cmd:sqlparams(sql, [t]) -> sql, names`         substitute named params
+`cmd:sqlargs(sql, ...) -> sql`                  substitute positional args
+`cmd:sqlname(s) -> s`                           format name: `'foo.bar'` -> `'`foo`.`bar`'`
+`cmd:sqlval(v[, field]) -> s`                   format any value
+`cmd:sqlrows(rows[, indent]) -> s`              format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
 `spp.tsv_rows(opt, s) -> rows`                  convert a tab-separated list to a list of rows
-`spp.tsv(opt, s) -> s`                          format a tab-separated list
-`spp.keyword.KEYWORD -> symbol`                 get a symbol for a keyword
-`spp.keywords[SYMBOL] = keyword`                set a keyword for a symbol
-`spp.subst'NAME text...'`                       create a substitution for `$NAME`
-`function spp.macro.NAME(...) end`              create a macro to be used as `$NAME(...)`
-`spp.has_ddl(sql) -> true|false`                check if an expanded query has DDL commands in it
-__Post-processing result sets__
-`spp.groups(col, rows|groups) -> groups`        group rows
-`spp.each_group(col, rows|groups) -> iter`      group rows and iterate groups
-__Command API__
-`spp.connect(options) -> cmd`                   make a command API based on a low-level API
+`cmd:sqltsv(opt, s) -> s`                       format a tab-separated list
 __Query execution__
 `cmd:query([opt], sql, ...) -> rows`            query
 `cmd:prepare([opt], sql, ...) -> stmt`          prepare query
@@ -46,6 +35,10 @@ __Query execution__
 `cmd:each_row_vals([opt], sql, ...)-> iter`     query and iterate rows unpacked
 `cmd:each_group(col, [opt], sql, ...) -> iter`  query, group by col and iterate groups
 `cmd:atomic(fn, ...) -> ...`                    call a function inside a transaction
+`cmd:has_ddl(sql) -> true|false`                check if an expanded query has DDL commands in it
+__Grouping result rowsets__
+`spp.groups(col, rows|groups) -> groups`        group rows
+`spp.each_group(col, rows|groups) -> iter`      group rows and iterate groups
 __DDL commands__
 `cmd:table_def('[schema.]table') -> t`          get table definition (cached)
 `cmd:create_database(name)`                     create database
@@ -72,12 +65,17 @@ __MDL commands__
 `cmd:update_row(tbl, vals, col_map, [filter])`  update row
 `cmd:delete_row(tbl, vals, col_map, [filter])`  delete row
 __Module system__
-`function sqlpp.package.NAME(spp) end`          extend the preprocessor with a module
+`function spp.package.NAME(spp) end`            extend the preprocessor with a module
 `spp.require(name)`                             load a module into the preprocessor instance
 __Modules__
 `require'sqlpp_mysql'`                          load the code for the MySQL module
 `spp.require'mysql'`                            load the MySQL module
 `spp.require'mysql_domains'`                    load common type domains for MySQL
+__Extending the preprocessor__
+`spp.keyword.KEYWORD -> symbol`                 get a symbol for a keyword
+`spp.keywords[SYMBOL] = keyword`                set a keyword for a symbol
+`spp.subst'NAME text...'`                       create a substitution for `$NAME`
+`function spp.macro.NAME(...) end`              create a macro to be used as `$NAME(...)`
 ----------------------------------------------- ------------------------------
 
 ## Preprocessor
@@ -149,7 +147,7 @@ macros.
 
 ## Module system
 
-## `function sqlpp.package.NAME(spp) end`
+## `function spp.package.NAME(spp) end`
 
 Extend the preprocessor with a module, available to all preprocessor
 instances to be loaded with `spp.require()`.
