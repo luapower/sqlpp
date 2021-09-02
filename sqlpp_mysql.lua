@@ -373,11 +373,11 @@ if not ... then
 			pp(cmd:table_def'usr')
 		end
 
-		if true then
+		if false then
 			pp(cmd:query'select * from val limit 1; select * from attr limit 1')
 		end
 
-		if false then
+		if true then
 			local stmt = assert(cmd:prepare('select * from val where val = :val'))
 			pp(stmt:exec{val = 2})
 		end

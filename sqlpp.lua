@@ -659,15 +659,18 @@ function M.new()
 	end
 
 	function cmd:query(opt, sql, ...)
+
 		if type(opt) ~= 'table' then --sql, ...
 			return self:query(empty, opt, sql, ...)
 		elseif type(sql) == 'table' then --opt1, opt2, sql, ...
 			return self:query(update(opt, sql), ...)
 		end
+
 		local param_names
 		if opt.parse ~= false then
 			sql, param_names = self:sqlquery(sql, ...)
 		end
+
 		if self:has_ddl(sql) then
 			self:schema_changed()
 		end
@@ -675,32 +678,7 @@ function M.new()
 			self:assert(self:rawquery(sql, opt)))
 	end
 
-	function cmd:prepare(opt, sql, ...)
-		if type(opt) ~= 'table' then --sql, ...
-			return self:prepare(empty, opt, sql, ...)
-		elseif type(sql) == 'table' then --opt1, opt2, sql, ...
-			return self:prepare(update(opt, sql), ...)
-		end
-		local param_names, param_map
-		if opt.parse ~= false then
-			sql, param_names, param_map = self:sqlprepare(sql, ...)
-		end
-		local cmd = self
-		local function pass(rawstmt, ...)
-			if rawstmt == nil then return nil, ... end
-			local stmt = {}
-			function stmt:free()
-				return cmd:rawstmt_free(rawstmt)
-			end
-			function stmt:exec(...)
-				local t = spp.map_params(param_map, ...)
-				return get_result_sets(cmd, nil, opt, param_names,
-					cmd:assert(cmd:rawstmt_query(rawstmt, opt, unpack(t, 1, t.n))))
-			end
-			return stmt, param_names
-		end
-		return pass(self:assert(self:rawprepare(sql, opt)))
-	end
+	cmd.exec_with_options = cmd.query
 
 	local function pass(rows, ...)
 		if rows and (...) then
@@ -710,21 +688,21 @@ function M.new()
 		end
 	end
 	function cmd:first_row(...)
-		return pass(self:query({to_array=1}, ...))
+		return pass(self:exec_with_options({to_array=1}, ...))
 	end
 
 	function cmd:each_group(col, ...)
-		local rows = self:query(...)
+		local rows = self:exec_with_options(nil, ...)
 		return spp.each_group(col, rows)
 	end
 
 	function cmd:each_row(...)
-		local rows = self:query({to_array=1}, ...)
+		local rows = self:exec_with_options({to_array=1}, ...)
 		return ipairs(rows)
 	end
 
 	function cmd:each_row_vals(...)
-		local rows, cols = self:query({compact=1, to_array=1}, ...)
+		local rows, cols = self:exec_with_options({compact=1, to_array=1}, ...)
 		local i, n, cn = 1, #rows, #cols
 		return function()
 			if i > n then return end
@@ -736,6 +714,51 @@ function M.new()
 				return i-1, unpack(row, 1, cn)
 			end
 		end
+	end
+
+	function cmd:exec(...)
+		return self:exec_with_options(nil, ...)
+	end
+
+	function cmd:prepare(opt, sql, ...)
+
+		if type(opt) ~= 'table' then --sql, ...
+			return self:prepare(empty, opt, sql, ...)
+		elseif type(sql) == 'table' then --opt1, opt2, sql, ...
+			return self:prepare(update(opt, sql), ...)
+		end
+
+		local param_names, param_map
+		if opt.parse ~= false then
+			sql, param_names, param_map = self:sqlprepare(sql, ...)
+		end
+
+		local cmd = self
+		local function pass(rawstmt, ...)
+			if rawstmt == nil then return nil, ... end
+
+			local stmt = {
+				exec          = cmd.exec,
+				first_row     = cmd.first_row,
+				each_group    = cmd.each_group,
+				each_row      = cmd.each_row,
+				each_row_vals = cmd.each_row_vals,
+			}
+
+			function stmt:free()
+				return cmd:rawstmt_free(rawstmt)
+			end
+
+			function stmt:exec_with_options(exec_opt, ...)
+				local t = spp.map_params(param_map, ...)
+				local opt = exec_opt and update(exec_opt, opt) or opt
+				return get_result_sets(cmd, nil, opt, param_names,
+					cmd:assert(cmd:rawstmt_query(rawstmt, opt, unpack(t, 1, t.n))))
+			end
+
+			return stmt, param_names
+		end
+		return pass(self:assert(self:rawprepare(sql, opt)))
 	end
 
 	function cmd:atomic(f, ...)
