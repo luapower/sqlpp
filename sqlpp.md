@@ -28,12 +28,16 @@ __Preprocessing__
 `cmd:sqltsv(opt, s) -> s`                       format a tab-separated list
 __Query execution__
 `cmd:query([opt], sql, ...) -> rows`            query
-`cmd:prepare([opt], sql, ...) -> stmt`          prepare query
-`stmt:exec(...) -> rows`                        exec prepared query
 `cmd:first_row([opt], sql, ...) -> rows`        query and return the first row
 `cmd:each_row([opt], sql, ...) -> iter`         query and iterate rows
 `cmd:each_row_vals([opt], sql, ...)-> iter`     query and iterate rows unpacked
 `cmd:each_group(col, [opt], sql, ...) -> iter`  query, group by col and iterate groups
+`cmd:prepare([opt], sql, ...) -> stmt`          prepare query
+`stmt:exec(...) -> rows`                        execute prepared query
+`stmt:first_row(...) -> rows`                   query and return the first row
+`stmt:each_row(...) -> iter`                    query and iterate rows
+`stmt:each_row_vals(...)-> iter`                query and iterate rows unpacked
+`stmt:each_group(col, ...) -> iter`             query, group by col and iterate groups
 `cmd:atomic(fn, ...) -> ...`                    call a function inside a transaction
 `cmd:has_ddl(sql) -> true|false`                check if an expanded query has DDL commands in it
 __Grouping result rowsets__
