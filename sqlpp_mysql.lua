@@ -13,6 +13,7 @@ local concat = table.concat
 local repl = glue.repl
 local outdent = glue.outdent
 local sortedpairs = glue.sortedpairs
+local subst = glue.subst
 
 local int_ranges = {
 	tinyint   = {-(2^ 7-1), 2^ 7, 0, 2^ 8-1},
@@ -30,7 +31,7 @@ function sqlpp.package.mysql(spp)
 
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
-		self.dbname = opt and opt.database
+		self.schema = cn.schema
 		function self:quote(s)
 			return cn:quote(s)
 		end
@@ -47,6 +48,9 @@ function sqlpp.package.mysql(spp)
 	end
 	function cmd:rawconnect(opt)
 		return pass(self, mysql.connect(opt))
+	end
+	function cmd:rawuse(cn)
+		return pass(self, cn)
 	end
 
 	function cmd:rawstmt_query(rawstmt, opt, ...)
@@ -200,7 +204,7 @@ function sqlpp.package.mysql(spp)
 
 		local fields, pk, ai_col = {}, {}
 
-		local rows = self:rawquery(fmt([[
+		for i,row in ipairs(self:rawquery(fmt([[
 			select
 				column_name,
 				data_type,
@@ -218,9 +222,8 @@ function sqlpp.package.mysql(spp)
 				information_schema.columns
 			where
 				table_schema = %s and table_name = %s
-			]], self:sqlval(sch), self:sqlval(tbl)))
-
-		for i,row in ipairs(rows) do
+			]], self:sqlval(sch), self:sqlval(tbl))))
+		do
 
 			local col = row.column_name
 			local type = row.data_type
@@ -254,7 +257,7 @@ function sqlpp.package.mysql(spp)
 				end
 			end
 
-			fields[i] = {
+			local field = {
 				name = col,
 				type = type,
 				enum_values = parse_enum(row.column_type),
@@ -272,42 +275,82 @@ function sqlpp.package.mysql(spp)
 				unique_key = row.column_key == 'UNI' or nil,
 				indexed    = row.column_key == 'MUL' or nil,
 			}
+			fields[i] = field
+			fields[col] = field
 		end
 
-		return {fields = fields, pk = pk, ai_col = ai_col}
+		for i, name, cols in spp.each_group('name', self:rawquery(fmt([[
+			select
+				constraint_name name,
+				column_name col,
+				referenced_table_schema ref_sch,
+				referenced_table_name ref_tbl,
+				referenced_column_name ref_col
+			from
+				information_schema.key_column_usage
+			where
+				table_schema = %s and table_name = %s
+				and referenced_column_name is not null
+			]], self:sqlval(sch), self:sqlval(tbl))))
+		do
+			if #cols == 1 then
+				local row = cols[1]
+				local field = fields[row.col:lower()]
+				field.ref_table = (row.ref_sch..'.'..row.ref_tbl):lower()
+				field.ref_col = row.ref_col:lower()
+			else
+				--TODO: comp-key fks
+			end
+		end
+
+		return {schema = sch, name = tbl, fields = fields, pk = pk, ai_col = ai_col}
 	end
 
 	--error message parsing
 
-	spp.errno[1364] = function(err)
+	spp.errno[1364] = function(self, err)
 		err.col = err.message:match"'(.-)'"
 		err.code = 'required'
 	end
 
-	spp.errno[1048] = function(err)
+	spp.errno[1048] = function(self, err)
 		err.col = err.message:match"'(.-)'"
 		err.code = 'not_null'
 	end
 
-	spp.errno[1062] = function(err)
+	spp.errno[1062] = function(self, err)
 		local pri = err.message:find"for key '.-%.PRIMARY'"
 		err.code = pri and 'pk' or 'uk'
+	end
+
+	spp.fk_message_remove = 'Cannot remove {foreign_entity}: remove any associated {entity} first.'
+	spp.fk_message_set = 'Cannot set {entity}: {foreign_entity} not found in database.'
+
+	local function fk_message(self, err, op)
+		local def = self:table_def(err.table)
+		local fdef = self:table_def(err.fk_table)
+		local t = {}
+		t.entity = (def.text or def.name):lower()
+		t.foreign_entity = (fdef.text or fdef.name):lower()
+		local s = op == 'remove' and spp.fk_message_remove or spp.fk_message_set
+		return subst(s, t)
 	end
 
 	local function dename(s)
 		return s:gsub('`', '')
 	end
-	local function errno_fk(err)
+	local function errno_fk(self, err, op)
 		local tbl, col, fk_tbl, fk_col =
 			err.message:match"%((.-), CONSTRAINT .- FOREIGN KEY %((.-)%) REFERENCES (.-) %((.-)%)"
-		err.tbl = dename(tbl)
+		err.table = dename(tbl)
 		err.col = dename(col)
-		err.fk_tbl = dename(fk_tbl)
+		err.fk_table = dename(fk_tbl)
 		err.fk_col = dename(fk_col)
+		err.message = fk_message(self, err, op)
 		err.code = 'fk'
 	end
-	spp.errno[1451] = errno_fk --can't delete
-	spp.errno[1452] = errno_fk --can't add/update
+	spp.errno[1451] = function(self, err) return errno_fk(self, err, 'remove') end
+	spp.errno[1452] = function(self, err) return errno_fk(self, err, 'set') end
 
 end
 
@@ -365,9 +408,13 @@ if not ... then
 			port = 3307,
 			user = 'root',
 			password = 'abcd12',
-			database = 'sp',
+			schema = 'sp',
 			collation = 'server',
 		}
+
+		spp.table_attrs['sp.val'] = {text = 'attribute value'}
+		spp.table_attrs['sp.attr'] = {text = 'attribute'}
+		spp.table_attrs['sp.combi_val'] = {text = 'attribute value combination'}
 
 		if false then
 			pp(cmd:table_def'usr')
@@ -377,13 +424,17 @@ if not ... then
 			pp(cmd:query'select * from val limit 1; select * from attr limit 1')
 		end
 
-		if true then
+		if false then
 			local stmt = assert(cmd:prepare('select * from val where val = :val'))
 			pp(stmt:exec{val = 2})
 		end
 
 		if false then
 			pp(cmd:query'insert into val (val, attr) values (100000000, 10000000)')
+		end
+
+		if true then
+			pp(cmd:query'delete from val where val = 1')
 		end
 
 		if false then

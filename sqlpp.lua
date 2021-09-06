@@ -592,7 +592,7 @@ function M.new()
 		)
 		local parse = spp.errno[errno]
 		if parse then
-			parse(err)
+			parse(self, err)
 		end
 		errors.raise(err)
 	end
@@ -600,6 +600,12 @@ function M.new()
 	function spp.connect(opt)
 		local self = update({}, cmd)
 		self.rawconn = self:assert(self:rawconnect(opt))
+		return self
+	end
+
+	function spp.use(rawconn)
+		local self = update({}, cmd)
+		self.rawconn = self:rawuse(rawconn)
 		return self
 	end
 
@@ -786,11 +792,12 @@ function M.new()
 	local function sch_tbl_arg(self, sch_tbl)
 		local sch, tbl = sch_tbl:match'^(.-)%.(.*)$'
 		if not sch then
-			sch, tbl = assert(self.dbname), sch_tbl
+			sch, tbl = assert(self.schema), sch_tbl
 		end
 		return strip_ticks(sch), strip_ticks(tbl)
 	end
 
+	spp.table_attrs = {} --{sch.tbl->attrs}
 	spp.col_attrs = {} --{sch.tbl.col->attrs}
 	spp.col_type_attrs = {} --{col_type->attrs}
 	spp.col_name_attrs = {} --{col_name->attrs}
@@ -801,14 +808,16 @@ function M.new()
 		if not def then
 			local sch, tbl = sch_tbl_arg(self, sch_tbl)
 			def = self:get_table_def(sch, tbl)
+			update(def, spp.table_attrs[sch..'.'..tbl])
 			if def then
 				cache[sch_tbl] = def
 				for _,field in ipairs(def.fields) do
 					local col = field.name
 					local col_attrs = spp.col_attrs[sch..'.'..tbl..'.'..col]
+					update(field, col_attrs) --allow col_attrs to change field's type.
 					local col_type_attrs = spp.col_type_attrs[field.type]
 					local col_name_attrs = spp.col_name_attrs[col]
-					update(field, col_attrs, col_type_attrs, col_name_attrs)
+					update(field, col_type_attrs, col_name_attrs)
 					def.fields[col] = field
 				end
 			end

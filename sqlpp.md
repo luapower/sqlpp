@@ -16,12 +16,14 @@ Preprocessor features:
 ----------------------------------------------- ------------------------------
 `sqlpp.new() -> spp`                            create a preprocessor instance
 `spp.connect(options) -> cmd`                   connect to a database
+`spp.use(rawconn) -> cmd`                       use an existing connection
 __Preprocessing__
 `cmd:sqlquery(sql, ...) -> sql, names`          preprocess a query
 `cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query leaving `?` placeholders
 `cmd:sqlparams(sql, [t]) -> sql, names`         substitute named params
 `cmd:sqlargs(sql, ...) -> sql`                  substitute positional args
 `cmd:sqlname(s) -> s`                           format name: `'foo.bar'` -> `'`foo`.`bar`'`
+`cmd:quote(s) -> s`                             quote a string to be used inside SQL string literals
 `cmd:sqlval(v[, field]) -> s`                   format any value
 `cmd:sqlrows(rows[, indent]) -> s`              format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
 `spp.tsv_rows(opt, s) -> rows`                  convert a tab-separated list to a list of rows
@@ -90,11 +92,14 @@ Create a preprocessor instance. Modules can be loaded into the instance
 with `spp.require()`.
 
 The preprocessor doesn't work all by itself, it needs a database-specific
-module to implement the particulars of your database engine. For instance
-`spp.string()` is a stub and for eg. MySQL is implemented in the module
-`sqlpp_mysql`.
+module to implement the particulars of your database engine. Currently only
+the MySQL engine is implemented in the module `sqlpp_mysql`.
 
-### `spp.query(sql, ...) -> sql, names`
+### `spp.connect(options) -> cmd` <br> `spp.use(rawconn) -> cmd`
+
+Make a command API based on a low-level query execution API.
+
+### `cmd:sqlquery(sql, ...) -> sql, names`
 
 Preprocess a SQL query, including hashtag conditionals, macro substitutions,
 quoted and unquoted param substitutions, symbol substitutions and removing
@@ -102,8 +107,9 @@ comments.
 
 Named args (called params, i.e. `:foo` and `::foo`) are looked up in vararg#1
 if it's a table but positional args (called args, i.e. `?` and `??`) are
-looked up in `...`, so you're not allowed to mix params and args in the same
-query otherwise vararg#1 would be used both for params and the first arg.
+looked up in `...`. Because of this, you're not allowed to mix named args
+and positional args in the same query otherwise vararg#1 would be used both
+as the table to look-up named args from, and as the first positional arg.
 
 Notes on value expansion:
 
@@ -116,11 +122,12 @@ Notes on value expansion:
   invalid syntax in MySQL).
 
   * never use dots in schema names, table names or column names,
-  or `pp.name()` won't work (other SQL tools won't work either).
+  or `sqlname()` won't work (other SQL tools won't work either).
 
   * avoid using multi-line comments except for optimizer hints because
   the preprocessor does not currently know to avoid parsing inside them
-  as it does with strings.
+  as it does with string literals (OTOH this allows you to parametrize
+  optimizer hints).
 
 ### `spp.keyword.KEYWORD -> symbol`
 
@@ -159,21 +166,6 @@ instances to be loaded with `spp.require()`.
 ### `spp.require(name)`
 
 Load a module into the preprocessor instance.
-
-## Command API
-
-### `spp.connect(options) -> cmd`
-
-Make a command API based on a low-level query exec API containing:
-
------------------------------------ ------------------------------------------
-`cmd:rawconnect()`                  one-time method to establish a connection
-`cmd:rawexec(sql, opt) -> rows`     query function
-`cmd:rawagain(opt) -> rows`         for queries with multiple result sets
------------------------------------ ------------------------------------------
-
-The returned command API inherits from `spp.command` which is where
-sqlpp modules publish their commands.
 
 ## Modules
 
