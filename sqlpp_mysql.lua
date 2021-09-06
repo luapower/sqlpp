@@ -239,23 +239,12 @@ function sqlpp.package.mysql(spp)
 				pk[#pk+1] = col
 			end
 
-			local min, max, decimals
+			local digits, decimals
 			if type == 'decimal' then
-				local digits = row.numeric_precision
+				digits = row.numeric_precision
 				decimals = row.numeric_scale
-				max = 10^(digits - decimals) - 1 / 10^decimals
-				min = unsigned and 0 or -max --unsigned decimals is deprecated!
-			else
-				local range = int_ranges[type]
-				if range then
-					decimals = 0
-					if unsigned then
-						min, max = range[3], range[4]
-					else
-						min, max = range[1], range[2]
-					end
-				end
 			end
+			local min, max = mysql.num_range(type, unsigned, digits, decimals)
 
 			local field = {
 				name = col,

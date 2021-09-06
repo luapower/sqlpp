@@ -197,6 +197,15 @@ function M.new()
 		end
 	end
 
+	function cmd:binval(v, field)
+		local to_bin = field and field.to_bin
+		if to_bin then
+			return to_bin(v)
+		else
+			return v
+		end
+	end
+
 	--macros ------------------------------------------------------------------
 
 	local defines = {}
@@ -377,15 +386,17 @@ function M.new()
 		return sqlquery(self, true, sql, ...)
 	end
 
-	function spp.map_params(param_map, ...)
+	local function map_params(stmt, cmd, param_map, ...)
 		local args, params = args_params(...)
 		local t = {}
 		for i,k in ipairs(param_map) do
+			local v
 			if type(k) == 'number' then --arg
-				t[i] = args[k]
+				v = args[k]
 			else --param
-				t[i] = params[k]
+				v = params[k]
 			end
+			t[i] = cmd:binval(v, stmt.params[i])
 			t.n = i
 		end
 		return t
@@ -756,7 +767,7 @@ function M.new()
 			end
 
 			function stmt:exec_with_options(exec_opt, ...)
-				local t = spp.map_params(param_map, ...)
+				local t = map_params(self, cmd, param_map, ...)
 				local opt = exec_opt and update(exec_opt, opt) or opt
 				return get_result_sets(cmd, nil, opt, param_names,
 					cmd:assert(cmd:rawstmt_query(rawstmt, opt, unpack(t, 1, t.n))))
