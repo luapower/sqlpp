@@ -239,18 +239,14 @@ function sqlpp.package.mysql(spp)
 				pk[#pk+1] = col
 			end
 
-			local digits, decimals
-			if type == 'decimal' then
-				digits = row.numeric_precision
-				decimals = row.numeric_scale
-			end
+			local digits = row.numeric_precision
+			local decimals = row.numeric_scale
 			local min, max = mysql.num_range(type, unsigned, digits, decimals)
 
 			local field = {
 				name = col,
 				type = type,
 				enum_values = parse_enum(row.column_type),
-				default = row.column_default,
 				auto_increment = auto_increment,
 				not_null = row.is_nullable == 'NO' or nil,
 				min = min,
@@ -266,6 +262,18 @@ function sqlpp.package.mysql(spp)
 			}
 			fields[i] = field
 			fields[col] = field
+
+			field.default = self.rawconn.to_lua(row.column_default, field)
+
+			--TODO: find a more general way to clear off non-constant defaults.
+			if field.default then
+				if type == 'datetime' or type == 'date' or type == 'timestamp' then
+					if field.default:find'^CURRENT_TIMESTAMP' then
+						field.default = nil
+					end
+				end
+			end
+
 		end
 
 		for i, name, cols in spp.each_group('name', self:rawquery(fmt([[
@@ -312,8 +320,13 @@ function sqlpp.package.mysql(spp)
 		err.code = pri and 'pk' or 'uk'
 	end
 
-	spp.fk_message_remove = 'Cannot remove {foreign_entity}: remove any associated {entity} first.'
-	spp.fk_message_set = 'Cannot set {entity}: {foreign_entity} not found in database.'
+	function spp.fk_message_remove()
+		return 'Cannot remove {foreign_entity}: remove any associated {entity} first.'
+	end
+
+	function spp.fk_message_set()
+		return 'Cannot set {entity}: {foreign_entity} not found in database.'
+	end
 
 	local function fk_message(self, err, op)
 		local def = self:table_def(err.table)
@@ -321,7 +334,7 @@ function sqlpp.package.mysql(spp)
 		local t = {}
 		t.entity = (def.text or def.name):lower()
 		t.foreign_entity = (fdef.text or fdef.name):lower()
-		local s = op == 'remove' and spp.fk_message_remove or spp.fk_message_set
+		local s = (op == 'remove' and spp.fk_message_remove or spp.fk_message_set)()
 		return subst(s, t)
 	end
 
@@ -352,14 +365,14 @@ function sqlpp.package.mysql_domains(spp)
 	spp.subst'email    varchar(128)'
 	spp.subst'hash     varchar(64) character set ascii' --enough for tohex(hmac.sha256())
 	spp.subst'url      varchar(2048) character set ascii'
-	spp.subst'bool     tinyint not null default 0'
-	spp.subst'bool1    tinyint not null default 1'
+	spp.subst'bool     tinyint(1) not null default 0'
+	spp.subst'bool1    tinyint(1) not null default 1'
 	spp.subst'atime    timestamp not null default current_timestamp'
 	spp.subst'ctime    timestamp not null default current_timestamp'
 	spp.subst'mtime    timestamp not null default current_timestamp on update current_timestamp'
-	spp.subst'money    decimal(20,6)'
-	spp.subst'qty      decimal(20,6)'
-	spp.subst'percent  decimal(20,6)'
+	spp.subst'money    decimal(15,3)' -- 999 999 999 999 . 999      (fits in a double)
+	spp.subst'qty      decimal(15,6)' --     999 999 999 . 999 999  (fits in a double)
+	spp.subst'percent  decimal(8,2)'  --         999 999 . 99
 	spp.subst'count    int unsigned not null default 0'
 	spp.subst'pos      int unsigned'
 	spp.subst'lang     char(2) character set ascii'

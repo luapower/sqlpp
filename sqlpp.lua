@@ -608,16 +608,21 @@ function M.new()
 		errors.raise(err)
 	end
 
+	function init(self, rawconn)
+		self.rawconn = rawconn
+		self.schema_cache_key = rawconn.host..':'..rawconn.port
+		self:schema_changed()
+		return self
+	end
+
 	function spp.connect(opt)
 		local self = update({}, cmd)
-		self.rawconn = self:assert(self:rawconnect(opt))
-		return self
+		return init(self, self:assert(self:rawconnect(opt)))
 	end
 
 	function spp.use(rawconn)
 		local self = update({}, cmd)
-		self.rawconn = self:rawuse(rawconn)
-		return self
+		return init(self, self:rawuse(rawconn))
 	end
 
 	function process_result_set(self, rows, fields, opt)
@@ -627,10 +632,10 @@ function M.new()
 		local fa = opt.field_attrs
 		for i,f in ipairs(fields) do
 			update(f, fa and fa[f.name])
-			if f.origin_table and f.schema then
-				local tdef = self:table_def(f.schema..'.'..f.origin_table)
+			if opt.get_table_defs and f.table and f.schema then
+				local tdef = self:table_def(f.schema..'.'..f.table)
 				if tdef then
-					update(f, tdef.fields[f.origin_name])
+					update(f, tdef.fields[f.col])
 				end
 			end
 		end
@@ -709,7 +714,7 @@ function M.new()
 	end
 
 	function cmd:each_group(col, ...)
-		local rows = self:exec_with_options(nil, ...)
+		local rows = self:exec_with_options(empty, ...)
 		return spp.each_group(col, rows)
 	end
 
@@ -789,12 +794,14 @@ function M.new()
 
 	--cached table defs -------------------------------------------------------
 
+	local schema_cache
+
 	function cmd:schema_changed()
-		self._schema_cache = nil
+		schema_cache = {}
 	end
 
 	function cmd:schema_cache()
-		return attr(self, '_schema_cache')
+		return attr(schema_cache, self.schema_cache_key)
 	end
 
 	local function strip_ticks(s)
@@ -829,7 +836,6 @@ function M.new()
 					local col_type_attrs = spp.col_type_attrs[field.type]
 					local col_name_attrs = spp.col_name_attrs[col]
 					update(field, col_type_attrs, col_name_attrs)
-					def.fields[col] = field
 				end
 			end
 		end
@@ -991,33 +997,47 @@ function M.new()
 
 	--MDL commands ------------------------------------------------------------
 
-	function where_sql(self, vals, col_map, pk, field_map, security_filter)
+	local function col_map_arg(s)
+		if type(s) ~= 'string' then
+			return s or empty
+		end
+		local t = {}
+		for s in names(s) do
+			local col, val_name = s:match'^(.-)=(.*)'
+			if not col then
+				col, val_name = s, s
+			end
+			t[col] = val_name
+		end
+		return t
+	end
+
+	local function where_sql(self, vals, col_map, pk, fields, security_filter)
 		local t = {}
 		for i, col in ipairs(pk) do
-			local val_name = col_map[col]
+			local val_name = col..':old'
+			local val_name = col_map[val_name] or val_name
 			local v = vals[val_name]
-			assert(v ~= nil)
-			local field = field_map[col]
+			local field = fields[col]
 			if i > 1 then add(t, ' and ') end
 			add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
 		end
 		local sql = concat(t)
 		if security_filter then
-			if type(security_filter) == 'table' then --
-				--
-			end
 			sql = '('..sql..') and ('..security_filter..')'
 		end
 		return sql
 	end
 
-	local function set_sql(self, vals, col_map, field_map)
+	local function set_sql(self, vals, col_map, fields)
 		local t = {}
-		for col, val_name in sortedpairs(col_map) do
-			local v = vals[val_name]
-			if v ~= nil then
-				local field = field_map[col]
-				add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
+		for _, field in ipairs(fields) do
+			local val_name = col_map[field.name]
+			if val_name then
+				local v = vals[val_name]
+				if v ~= nil then
+					add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
+				end
 			end
 		end
 		return #t > 0 and concat(t, ',\n\t')
@@ -1028,6 +1048,7 @@ function M.new()
 		return repl(ret.insert_id, 0, nil)
 	end
 	function cmd:insert_row(tbl, vals, col_map)
+		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
 		local set_sql = set_sql(vals, col_map, tdef.fields)
 		local sql
@@ -1041,8 +1062,22 @@ function M.new()
 		end
 		return pass(self:query({parse = false}, sql))
 	end
+	function cmd:insert_or_update_row(tbl, vals, col_map)
+		local col_map = col_map_arg(col_map)
+		local tdef = self:table_def(tbl)
+		assert(not tdef.ai_col) --misuse
+		local set_sql = set_sql(vals, col_map, tdef.fields)
+		local sql = fmt(outdent[[
+				insert into %s set
+					%s
+				on duplicate key update
+					%s
+			]], self:sqlname(tbl), set_sql, set_sql)
+		return pass(self:query({parse = false}, sql))
+	end
 
 	function cmd:update_row(tbl, vals, col_map, security_filter)
+		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
 		local set_sql = set_sql(vals, col_map, tdef.fields)
 		if not set_sql then
@@ -1058,6 +1093,7 @@ function M.new()
 	end
 
 	function cmd:delete_row(tbl, vals, col_map, security_filter)
+		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
 		local where_sql = where_sql(vals, col_map, tdef.pk, tdef.fields, security_filter)
 		local sql = fmt(outdent[[
@@ -1070,6 +1106,7 @@ function M.new()
 	--You do the math for the other rows, they should be consecutive even
 	--while other inserts are happening at the same time but I'm not sure.
 	function cmd:insert_rows(tbl, rows, col_map, compact)
+		local col_map = col_map_arg(col_map)
 		if #rows == 0 then
 			return
 		end
