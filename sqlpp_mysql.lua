@@ -36,6 +36,7 @@ function sqlpp.package.mysql(spp)
 			return cn:quote(s)
 		end
 		function self:rawquery(sql, opt)
+			print(sql)
 			return cn:query(sql, opt)
 		end
 		function self:rawagain(opt)
@@ -362,6 +363,8 @@ function sqlpp.package.mysql_domains(spp)
 	spp.subst'bigid    bigint unsigned'
 	spp.subst'bigpk    bigint unsigned primary key auto_increment'
 	spp.subst'name     varchar(64)'
+	spp.subst'strid    varchar(64) character set ascii'
+	spp.subst'strpk    varchar(64) character set ascii primary key'
 	spp.subst'email    varchar(128)'
 	spp.subst'hash     varchar(64) character set ascii' --enough for tohex(hmac.sha256())
 	spp.subst'url      varchar(2048) character set ascii'

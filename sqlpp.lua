@@ -16,6 +16,9 @@ local attr = glue.attr
 local update = glue.update
 local empty = glue.empty
 local names = glue.names
+local outdent = glue.outdent
+local map = glue.map
+local pack = glue.pack
 
 local M = {package = {}}
 
@@ -235,7 +238,7 @@ function M.new()
 			arg = glue.trim(arg)
 			dt[#dt+1] = macro_arg(self, arg, t) --expand params in macro args *unquoted*!
 		end
-		return macro(unpack(dt))
+		return macro(self, unpack(dt))
 	end
 
 	--named params & positional args substitution -----------------------------
@@ -620,6 +623,11 @@ function M.new()
 		return init(self, self:assert(self:rawconnect(opt)))
 	end
 
+	function cmd:use(schema)
+		self:assert(self.rawconn:use(schema))
+		return self
+	end
+
 	function spp.use(rawconn)
 		local self = update({}, cmd)
 		return init(self, self:rawuse(rawconn))
@@ -867,20 +875,20 @@ function M.new()
 	local function ukname(tbl, col) return indexname('uk', tbl, col) end
 	local function ixname(tbl, col) return indexname('ix', tbl, deixcol(col)) end
 
-	function spp.macro.fk(tbl, col, ftbl, fcol, ondelete, onupdate)
+	function spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate)
 		ondelete = ondelete or 'restrict'
 		onupdate = onupdate or 'cascade'
 		local a1 = ondelete ~= 'restrict' and ' on delete '..ondelete or ''
 		local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
 		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
-			fkname(tbl, col), cols(col), ftbl, cols(fcol or col), a1, a2)
+			fkname(tbl, col), cols(col), ftbl or col, cols(fcol or ftbl or col), a1, a2)
 	end
 
-	function spp.macro.child_fk(tbl, col, ftbl, fcol)
-		return spp.macro.fk(tbl, col, ftbl, fcol, 'cascade')
+	function spp.macro.child_fk(self, tbl, col, ftbl, fcol)
+		return spp.macro.fk(self, tbl, col, ftbl, fcol, 'cascade')
 	end
 
-	function spp.macro.uk(tbl, col)
+	function spp.macro.uk(self, tbl, col)
 		return fmt('constraint %s unique key (%s)', ukname(tbl, col), cols(col))
 	end
 
@@ -889,8 +897,13 @@ function M.new()
 			:gsub(',asc$', ' asc'):gsub(',desc$', ' desc')
 			:gsub(',asc,', ' asc,'):gsub(',desc,', ' desc,')
 	end
-	function spp.macro.ix(tbl, col)
+	function spp.macro.ix(self, tbl, col)
 		return fmt('index %s (%s)', ixname(tbl, col), ixcols(col))
+	end
+
+	function spp.macro.enum(self, ...)
+		return fmt('enum %s character set ascii',
+			concat(map(pack(...), function() return self:sqlstring(s) end), ', '))
 	end
 
 	--DDL commands ------------------------------------------------------------
@@ -898,9 +911,8 @@ function M.new()
 	--databases
 
 	function cmd:create_database(name, charset, collation)
-		charset = charset or ''
 		return self:query(outdent[[
-			create database if not exists ?:name
+			create database if not exists ::name
 				#if charset
 				character set {charset}
 				#endif
