@@ -36,7 +36,6 @@ function sqlpp.package.mysql(spp)
 			return cn:quote(s)
 		end
 		function self:rawquery(sql, opt)
-			print(sql)
 			return cn:query(sql, opt)
 		end
 		function self:rawagain(opt)
