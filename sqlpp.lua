@@ -910,7 +910,7 @@ function M.new()
 
 	--databases
 
-	function cmd:create_database(name, charset, collation)
+	function cmd:create_schema(name, charset, collation)
 		return self:query(outdent[[
 			create database if not exists ::name
 				#if charset
@@ -921,8 +921,8 @@ function M.new()
 				#endif
 			]], {
 				name = name,
-				charset = charset,
-				collation = collation,
+				charset = repl(charset, nil, 'utf8mb4'),
+				collation = repl(collation, nil, 'utf8mb4_unicode_ci'),
 			})
 	end
 
