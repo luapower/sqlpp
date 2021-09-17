@@ -625,6 +625,7 @@ function M.new()
 
 	function cmd:use(schema)
 		self:assert(self.rawconn:use(schema))
+		self.schema = self.rawconn.schema
 		return self
 	end
 
@@ -1014,7 +1015,7 @@ function M.new()
 			return s or empty
 		end
 		local t = {}
-		for s in names(s) do
+		for _,s in ipairs(names(s)) do
 			local col, val_name = s:match'^(.-)=(.*)'
 			if not col then
 				col, val_name = s, s
@@ -1048,7 +1049,7 @@ function M.new()
 			if val_name then
 				local v = vals[val_name]
 				if v ~= nil then
-					add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
+					add(t, self:sqlname(field.name)..' = '..self:sqlval(v, field))
 				end
 			end
 		end
@@ -1062,7 +1063,7 @@ function M.new()
 	function cmd:insert_row(tbl, vals, col_map)
 		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
-		local set_sql = set_sql(vals, col_map, tdef.fields)
+		local set_sql = set_sql(self, vals, col_map, tdef.fields)
 		local sql
 		if not set_sql then --no fields, special syntax.
 			sql = fmt('insert into %s values ()', self:sqlname(tbl))
@@ -1078,7 +1079,7 @@ function M.new()
 		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
 		assert(not tdef.ai_col) --misuse
-		local set_sql = set_sql(vals, col_map, tdef.fields)
+		local set_sql = set_sql(self, vals, col_map, tdef.fields)
 		local sql = fmt(outdent[[
 				insert into %s set
 					%s
@@ -1091,7 +1092,7 @@ function M.new()
 	function cmd:update_row(tbl, vals, col_map, security_filter)
 		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
-		local set_sql = set_sql(vals, col_map, tdef.fields)
+		local set_sql = set_sql(self, vals, col_map, tdef.fields)
 		if not set_sql then
 			return
 		end
