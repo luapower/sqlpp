@@ -411,7 +411,7 @@ if not ... then
 			host = '127.0.0.1',
 			port = 3307,
 			user = 'root',
-			password = 'abcd12',
+			password = 'root',
 			schema = 'sp',
 			collation = 'server',
 		}
