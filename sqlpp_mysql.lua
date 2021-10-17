@@ -75,6 +75,22 @@ function sqlpp.package.mysql(spp)
 		return v and 1 or 0
 	end
 
+	spp.col_type_attrs.bool = {
+		from_server = function(self, v)
+			if v == nil then return nil end
+			return v ~= 0
+		end,
+	}
+
+	spp.col_type_attrs.timestamp = {
+		to_sql = function(v)
+			if type(v) == 'number' then --timestamp
+				return format('from_unixtime(%0.17g)', v)
+			end
+			return v
+		end,
+	}
+
 	--DDL commands ------------------------------------------------------------
 
 	--existence tests for indices and columns
@@ -303,7 +319,7 @@ function sqlpp.package.mysql(spp)
 		return {schema = sch, name = tbl, fields = fields, pk = pk, ai_col = ai_col}
 	end
 
-	--error message parsing
+	--error message parsing ---------------------------------------------------
 
 	spp.errno[1364] = function(self, err)
 		err.col = err.message:match"'(.-)'"

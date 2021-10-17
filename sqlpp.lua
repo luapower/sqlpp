@@ -173,10 +173,10 @@ function M.new()
 
 	function cmd:sqlval(v, field)
 		local to_sql = field and field.to_sql
-		if to_sql then
-			return to_sql(v)
-		elseif v == nil then
+		if v == nil then
 			return 'null'
+		elseif to_sql then
+			return to_sql(v)
 		elseif type(v) == 'number' then
 			return self:sqlnumber(v)
 		elseif type(v) == 'string' then
@@ -1096,7 +1096,7 @@ function M.new()
 		if not set_sql then
 			return
 		end
-		local where_sql = where_sql(vals, col_map, tdef.pk, tdef.fields, security_filter)
+		local where_sql = where_sql(self, vals, col_map, tdef.pk, tdef.fields, security_filter)
 		local sql = fmt(outdent[[
 			update %s set
 				%s
@@ -1108,7 +1108,7 @@ function M.new()
 	function cmd:delete_row(tbl, vals, col_map, security_filter)
 		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
-		local where_sql = where_sql(vals, col_map, tdef.pk, tdef.fields, security_filter)
+		local where_sql = where_sql(self, vals, col_map, tdef.pk, tdef.fields, security_filter)
 		local sql = fmt(outdent[[
 			delete from %s where %s
 		]], self:sqlname(tbl), where_sql)
