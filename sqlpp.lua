@@ -17,7 +17,7 @@ local update = glue.update
 local empty = glue.empty
 local names = glue.names
 local outdent = glue.outdent
-local map = glue.map
+local imap = glue.imap
 local pack = glue.pack
 
 local M = {package = {}}
@@ -904,7 +904,7 @@ function M.new()
 
 	function spp.macro.enum(self, ...)
 		return fmt('enum %s character set ascii',
-			concat(map(pack(...), function() return self:sqlstring(s) end), ', '))
+			concat(imap(pack(...), function() return self:sqlstring(s) end), ', '))
 	end
 
 	--DDL commands ------------------------------------------------------------
