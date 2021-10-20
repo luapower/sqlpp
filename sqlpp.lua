@@ -14,6 +14,7 @@ local assertf = glue.assert
 local repl = glue.repl
 local attr = glue.attr
 local update = glue.update
+local merge = glue.merge
 local empty = glue.empty
 local names = glue.names
 local outdent = glue.outdent
@@ -644,7 +645,7 @@ function M.new()
 			if opt.get_table_defs and f.table and f.schema then
 				local tdef = self:table_def(f.schema..'.'..f.table)
 				if tdef then
-					update(f, tdef.fields[f.col])
+					merge(f, tdef.fields[f.col])
 				end
 			end
 		end
