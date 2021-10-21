@@ -383,6 +383,7 @@ function sqlpp.package.mysql_domains(spp)
 	spp.subst'email    varchar(128)'
 	spp.subst'hash     varchar(64) character set ascii' --enough for tohex(hmac.sha256())
 	spp.subst'url      varchar(2048) character set ascii'
+	spp.subst'b64key   varchar(8192) character set ascii'
 	spp.subst'bool     tinyint(1) not null default 0'
 	spp.subst'bool1    tinyint(1) not null default 1'
 	spp.subst'atime    timestamp not null default current_timestamp'
