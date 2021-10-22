@@ -649,24 +649,6 @@ function M.new()
 				end
 			end
 		end
-		for i,f in ipairs(fields) do
-			local convert = f.to_lua
-			if convert then
-				for i = 1, #rows do
-					if #fields == 1 and opt.to_array then
-						rows[i] = convert(rows[i])
-					elseif opt.compact then
-						local row = rows[i]
-						local fi = fields[col].index
-						row[fi] = convert(row[fi])
-					else
-						local row = rows[i]
-						local fi = fields[col].name
-						row[fi] = convert(row[fi])
-					end
-				end
-			end
-		end
 	end
 
 	local function get_result_sets(self, results, opt, param_names, ret, ...)
