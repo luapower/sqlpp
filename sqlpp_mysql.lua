@@ -246,6 +246,12 @@ function sqlpp.package.mysql(spp)
 			local auto_increment = row.extra == 'auto_increment' or nil
 			local unsigned = row.column_type:find' unsigned$' and true or nil
 
+			if row.column_type == 'tinyint(1)' then --bool by convention
+				type = 'bool'
+				row.numeric_precision = nil
+				row.numeric_scale = nil
+			end
+
 			if auto_increment then
 				assert(not ai_col)
 				ai_col = col
@@ -260,7 +266,7 @@ function sqlpp.package.mysql(spp)
 			local min, max = mysql.num_range(type, unsigned, digits, decimals)
 
 			local field = {
-				name = col,
+				col = col,
 				type = type,
 				enum_values = parse_enum(row.column_type),
 				auto_increment = auto_increment,

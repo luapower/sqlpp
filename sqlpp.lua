@@ -641,13 +641,13 @@ function M.new()
 		end
 		local fa = opt.field_attrs
 		for i,f in ipairs(fields) do
-			update(f, fa and fa[f.name])
 			if opt.get_table_defs and f.table and f.schema then
 				local tdef = self:table_def(f.schema..'.'..f.table)
 				if tdef then
-					merge(f, tdef.fields[f.col])
+					update(f, tdef.fields[f.col])
 				end
 			end
+			update(f, fa and fa[f.name])
 		end
 	end
 
@@ -822,7 +822,7 @@ function M.new()
 			if def then
 				cache[sch_tbl] = def
 				for _,field in ipairs(def.fields) do
-					local col = field.name
+					local col = field.col
 					local col_attrs = spp.col_attrs[sch..'.'..tbl..'.'..col]
 					update(field, col_attrs) --allow col_attrs to change field's type.
 					local col_type_attrs = spp.col_type_attrs[field.type]
@@ -1028,11 +1028,11 @@ function M.new()
 	local function set_sql(self, vals, col_map, fields)
 		local t = {}
 		for _, field in ipairs(fields) do
-			local val_name = col_map[field.name]
+			local val_name = col_map[field.col]
 			if val_name then
 				local v = vals[val_name]
 				if v ~= nil then
-					add(t, self:sqlname(field.name)..' = '..self:sqlval(v, field))
+					add(t, self:sqlname(field.col)..' = '..self:sqlval(v, field))
 				end
 			end
 		end
