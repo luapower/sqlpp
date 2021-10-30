@@ -149,7 +149,7 @@ function M.new()
 	local _ = spp.keyword.default
 
 	function cmd:sqlstring(s)
-		return "'"..self:quote(s).."'"
+		return "'"..self:esc(s).."'"
 	end
 
 	function cmd:sqlnumber(x) --stub

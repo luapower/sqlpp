@@ -32,8 +32,8 @@ function sqlpp.package.mysql(spp)
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
 		self.schema = cn.schema
-		function self:quote(s)
-			return cn:quote(s)
+		function self:esc(s)
+			return cn:esc(s)
 		end
 		function self:rawquery(sql, opt)
 			return cn:query(sql, opt)

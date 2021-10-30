@@ -23,7 +23,7 @@ __Preprocessing__
 `cmd:sqlparams(sql, [t]) -> sql, names`         substitute named params
 `cmd:sqlargs(sql, ...) -> sql`                  substitute positional args
 `cmd:sqlname(s) -> s`                           format name: `'foo.bar'` -> `'`foo`.`bar`'`
-`cmd:quote(s) -> s`                             quote a string to be used inside SQL string literals
+`cmd:esc(s) -> s`                               escape a string to be used inside SQL string literals
 `cmd:sqlval(v[, field]) -> s`                   format any value
 `cmd:sqlrows(rows[, indent]) -> s`              format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
 `spp.tsv_rows(opt, s) -> rows`                  convert a tab-separated list to a list of rows
