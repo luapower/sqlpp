@@ -93,6 +93,9 @@ function sqlpp.package.mysql(spp)
 
 	--DDL commands ------------------------------------------------------------
 
+	spp.default_charset = 'utf8mb4'
+	spp.default_collation = 'utf8mb4_unicode_ci'
+
 	--existence tests for indices and columns
 
 	function cmd:index_exists(name)
@@ -106,6 +109,15 @@ function sqlpp.package.mysql(spp)
 		return self:first_row([[
 			select 1 from information_schema.columns
 			where table_schema = database() and table_name = ? and column_name = ?
+		]], tbl, name) ~= nil
+	end
+
+	--check constraints
+
+	function cmd:check_exists(tbl, name)
+		return self:first_row([[
+			sekect 1 from information_schema.check_constraints
+			where table_schema = database() and table_name = ? and constraint_name = ?
 		]], tbl, name) ~= nil
 	end
 
@@ -387,9 +399,9 @@ function sqlpp.package.mysql_domains(spp)
 	spp.subst'strid    varchar(64) character set ascii'
 	spp.subst'strpk    varchar(64) character set ascii primary key'
 	spp.subst'email    varchar(128)'
-	spp.subst'hash     varchar(64) character set ascii' --enough for tohex(hmac.sha256())
+	spp.subst'hash     varchar(64) character set ascii collate ascii_bin' --enough for tohex(hmac.sha256())
 	spp.subst'url      varchar(2048) character set ascii'
-	spp.subst'b64key   varchar(8192) character set ascii'
+	spp.subst'b64key   varchar(8192) character set ascii collate ascii_bin'
 	spp.subst'bool     tinyint(1) not null default 0'
 	spp.subst'bool1    tinyint(1) not null default 1'
 	spp.subst'atime    timestamp not null default current_timestamp'

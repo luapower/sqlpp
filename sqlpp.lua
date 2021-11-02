@@ -905,8 +905,8 @@ function M.new()
 				#endif
 			]], {
 				name = name,
-				charset = repl(charset, nil, 'utf8mb4'),
-				collation = repl(collation, nil, 'utf8mb4_unicode_ci'),
+				charset = repl(charset, nil, spp.default_charset),
+				collation = repl(collation, nil, spp.default_collation),
 			})
 	end
 
@@ -939,6 +939,24 @@ function M.new()
 	function cmd:drop_column(tbl, name)
 		if not self:column_exists(tbl, old_name) then return end
 		return self:query('alter table ?? remove column ??', tbl, name)
+	end
+
+	--check constraints
+
+	function cmd:add_check(tbl, name, expr)
+		if self:check_exists(tbl, name) then return end
+		return self:query(fmt('alter table ?? add constraint ?? check(%s)', expr), tbl, name)
+	end
+
+	function cmd:drop_check(tbl, name)
+		if self:check_exists(tbl, name) then return end
+		return self:query('alter table ?? drop constraint ??', tbl, name)
+	end
+
+	function cmd:readd_check(tbl, name, expr)
+		if self:drop_check(tbl, name) then
+			self:add_check(tbl, name, expr)
+		end
 	end
 
 	--forein keys, indices, unique keys
