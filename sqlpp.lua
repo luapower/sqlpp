@@ -20,6 +20,7 @@ local names = glue.names
 local outdent = glue.outdent
 local imap = glue.imap
 local pack = glue.pack
+local trim = glue.trim
 
 local M = {package = {}}
 
@@ -123,7 +124,7 @@ function M.new()
 			elseif state.active then
 				line = line:gsub('%-%-.*', '') --remove `-- ...` comments
 				line = line:gsub('#.*', '') -- remove `# ...` comments
-				if glue.trim(line) ~= '' then
+				if trim(line) ~= '' then
 					add(t, line)
 				end
 			end
@@ -162,9 +163,10 @@ function M.new()
 
 	--NOTE: don't use dots in db names, table names and column names!
 	local function add_ticks(s)
-		return '`'..s..'`'
+		return '`'..trim(s)..'`'
 	end
 	function cmd:sqlname(s)
+		s = trim(s)
 		assert(s, 'sql name missing')
 		if s:sub(1, 1) == '`' then
 			return s
@@ -236,7 +238,7 @@ function M.new()
 		args = args:sub(2,-2)..','
 		local dt = {}
 		for arg in args:gmatch'([^,]+)' do
-			arg = glue.trim(arg)
+			arg = trim(arg)
 			dt[#dt+1] = macro_arg(self, arg, t) --expand params in macro args *unquoted*!
 		end
 		return macro(self, unpack(dt))
@@ -408,7 +410,7 @@ function M.new()
 
 	--TODO: this gives false positives (but no false negatives which is what we want).
 	function cmd:has_ddl(sql)
-		sql = glue.trim(sql):lower()
+		sql = trim(sql):lower()
 		return
 		      sql:find'^create%s'
 			or sql:find'^alter%s'
@@ -478,7 +480,7 @@ function M.new()
 	--tab-separated rows parsing ----------------------------------------------
 
 	function spp.tsv_rows(t, s) --{n=3|cols='3 1 2', transform1, ...}
-		s = glue.trim(s)
+		s = trim(s)
 		local cols
 		if t.cols then
 			cols = {}
@@ -928,7 +930,7 @@ function M.new()
 
 	function cmd:add_column(tbl, name, type_pos)
 		if self:column_exists(tbl, name) then return end
-		return self:query(fmt('alter table ?? add column %s %s', name, type_pos), tbl)
+		return self:query('alter table ?? add column ??'..type_pos, tbl, name)
 	end
 
 	function cmd:rename_column(tbl, old_name, new_name)
