@@ -30,9 +30,16 @@ function M.new()
 	local cmd = {}
 	spp.command = cmd
 
+	local avoid_code = string.byte'?' --because we're gonna match '?' alone later
+	local function mark(n)
+		assert(n <= 254, 'too many substitutions')
+		local n = n ~= avoid_code and n or 255
+		return '\0'..char(n)
+	end
+
 	--parsing string literals -------------------------------------------------
 
-	function collect_strings(s, dt)
+	function collect_strings(s, repl)
 		local i = 1
 		local t = {}
 		::next_string::
@@ -54,8 +61,8 @@ function M.new()
 			i2 = s:find("'", j, true) --string literal end
 			if i2 then
 				add(t, s:sub(i, i1 - 1))
-				add(dt, s:sub(i1, i2))
-				add(t, '\0'..char(#dt))
+				add(repl, s:sub(i1, i2))
+				add(t, mark(#repl))
 				i = i2 + 1
 				goto next_string
 			else
@@ -284,7 +291,7 @@ function M.new()
 
 		local args, params = args_params(...)
 
-		if not sql:find'[#$:?{%-;]' then --nothing to see here
+		if not sql:find'[#$:?{]' and not sql:find'%-%-' then --nothing to see here
 			return sql, empty
 		end
 
@@ -310,7 +317,7 @@ function M.new()
 		sql = sql:gsub('$([%w_]+)(%b())', function(name, args)
 				add(macros, name)
 				add(macros, args)
-				return '\0'..char(#repl + #macros / 2)
+				return mark(#repl + #macros / 2)
 			end) --$foo(arg1,...)
 		for i = 1, #macros, 2 do
 			local m_name, m_args = macros[i], macros[i+1]
@@ -320,7 +327,7 @@ function M.new()
 		--collect defines
 		sql = sql:gsub('$([%w_]+)', function(name)
 				add(repl, assertf(defines[name], '$%s is undefined', name))
-				return '\0'..char(#repl)
+				return mark(#repl)
 			end) --$foo
 
 		local param_names = {}
@@ -329,7 +336,7 @@ function M.new()
 		sql = glue.subst(sql, function(name)
 				add(param_names, name)
 				add(repl, assertf(params[name], '{%s} is missing', name))
-				return '\0'..char(#repl)
+				return mark(#repl)
 			end) --{foo}
 
 		local param_map = prepare and {}
@@ -339,7 +346,7 @@ function M.new()
 				add(param_names, k)
 				local v, err = self:sqlname(params[k])
 				add(repl, assertf(v, 'param %s: %s', k, err))
-				return '\0'..char(#repl)
+				return mark(#repl)
 			end):gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
 				add(param_names, k)
 				if prepare then
@@ -349,7 +356,7 @@ function M.new()
 					local v, err = opt and opt.prepare and '?' or self:sqlval(params[k])
 					add(repl, assertf(v, 'param %s: %s', k, err))
 				end
-				return '\0'..char(#repl)
+				return mark(#repl)
 			end)
 
 		--collect indexed params
@@ -358,7 +365,7 @@ function M.new()
 				i = i + 1
 				local v, err = self:sqlname(args[i])
 				add(repl, assertf(v, 'param %d: %s', i, err))
-				return '\0'..char(#repl)
+				return mark(#repl)
 			end):gsub('%?', function() -- ?
 				i = i + 1
 				if prepare then
@@ -368,7 +375,7 @@ function M.new()
 					local v, err = self:sqlval(args[i])
 					add(repl, assertf(v, 'param %d: %s', i, err))
 				end
-				return '\0'..char(#repl)
+				return mark(#repl)
 			end)
 
 		assert(not (#param_names > 0 and i > 0),
@@ -378,6 +385,7 @@ function M.new()
 
 		sql = sql:gsub('%z(.)', function(ci)
 			local i = string.byte(ci)
+			if i == 255 then i = avoid_code end
 			return repl[i]
 		end)
 
@@ -888,8 +896,8 @@ function M.new()
 	end
 
 	function spp.macro.enum(self, ...)
-		return fmt('enum %s character set ascii',
-			concat(imap(pack(...), function() return self:sqlstring(s) end), ', '))
+		return fmt('enum (%s) character set ascii',
+			concat(imap(pack(...), function(s) return self:sqlstring(s) end), ', '))
 	end
 
 	--DDL commands ------------------------------------------------------------
@@ -939,8 +947,8 @@ function M.new()
 	end
 
 	function cmd:drop_column(tbl, name)
-		if not self:column_exists(tbl, old_name) then return end
-		return self:query('alter table ?? remove column ??', tbl, name)
+		if not self:column_exists(tbl, name) then return end
+		return self:query('alter table ?? drop column ??', tbl, name)
 	end
 
 	--check constraints
@@ -966,7 +974,7 @@ function M.new()
 	function cmd:add_fk(tbl, col, ftbl, ...)
 		if self:index_exists(fkname(tbl, col)) then return end
 		return self:query('alter table ?? add ' ..
-			spp.macro.fk(self:sqlname(tbl), col, self:sqlname(ftbl), ...), tbl)
+			spp.macro.fk(self, self:sqlname(tbl), col, self:sqlname(ftbl), ...), self:sqlname(tbl))
 	end
 
 	function cmd:add_uk(tbl, col)
