@@ -182,7 +182,7 @@ function sqlpp.package.mysql(spp)
 		if self:proc_exists(name) then return end
 		code = outdent(code, '\t')
 		return self:query(fmt(outdent[[
-			create procedure ::name (%s)
+			create procedure ::name (%s) sql security invoker
 			begin
 			%s
 			end

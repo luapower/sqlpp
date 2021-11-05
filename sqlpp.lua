@@ -863,7 +863,7 @@ function M.new()
 	end
 
 	local function indexname(type, tbl, col, suffix)
-		return fmt('%s_%s_%s%s', type, dename(tbl), dename(cols(col, '_')), suffix)
+		return fmt('%s_%s_%s%s', type, dename(tbl), dename(cols(col, '_')), suffix or '')
 	end
 	local function fkname(tbl, col, suffix) return indexname('fk', tbl, col, suffix) end
 	local function ukname(tbl, col, suffix) return indexname('uk', tbl, col, suffix) end
