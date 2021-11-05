@@ -972,13 +972,13 @@ function M.new()
 	--forein keys, indices, unique keys
 
 	function cmd:add_fk(tbl, col, ftbl, ...)
-		if self:index_exists(fkname(tbl, col)) then return end
+		if self:fk_exists(fkname(tbl, col)) then return end
 		return self:query('alter table ?? add ' ..
 			spp.macro.fk(self, self:sqlname(tbl), col, self:sqlname(ftbl), ...), self:sqlname(tbl))
 	end
 
 	function cmd:add_uk(tbl, col)
-		if self:index_exists(ukname(tbl, col)) then return end
+		if self:fk_exists(ukname(tbl, col)) then return end
 		return self:query('alter table ?? add ' .. spp.macro.uk(self:sqlname(tbl), col), tbl)
 	end
 

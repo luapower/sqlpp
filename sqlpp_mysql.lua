@@ -98,11 +98,18 @@ function sqlpp.package.mysql(spp)
 
 	--existence tests for indices and columns
 
+	function cmd:fk_exists(name)
+		return self:first_row([[
+			select 1 from information_schema.referential_constraints
+			where constraint_schema = database() and constraint_name = ?
+		]], name) ~= nil
+	end
+
 	function cmd:index_exists(name)
 		return self:first_row([[
-			select 1 from information_schema.innodb_indexes i
-			where i.name = ?
-		]], name) ~= nil --single-column result returned as array of values.
+			select 1 from information_schema.statistics
+			where table_schema = database() and index_name = ?
+		]], name) ~= nil
 	end
 
 	function cmd:column_exists(tbl, name)
