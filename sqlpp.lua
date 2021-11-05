@@ -862,24 +862,32 @@ function M.new()
 			:gsub(' asc ', ''):gsub(' desc ', '')
 	end
 
-	local function indexname(type, tbl, col)
-		return fmt('%s_%s_%s', type, dename(tbl), dename(cols(col, '_')))
+	local function indexname(type, tbl, col, suffix)
+		return fmt('%s_%s_%s%s', type, dename(tbl), dename(cols(col, '_')), suffix)
 	end
-	local function fkname(tbl, col) return indexname('fk', tbl, col) end
-	local function ukname(tbl, col) return indexname('uk', tbl, col) end
-	local function ixname(tbl, col) return indexname('ix', tbl, deixcol(col)) end
+	local function fkname(tbl, col, suffix) return indexname('fk', tbl, col, suffix) end
+	local function ukname(tbl, col, suffix) return indexname('uk', tbl, col, suffix) end
+	local function ixname(tbl, col, suffix) return indexname('ix', tbl, deixcol(col), suffix) end
 
-	function spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate)
+	function spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate, suffix)
 		ondelete = ondelete or 'restrict'
 		onupdate = onupdate or 'cascade'
 		local a1 = ondelete ~= 'restrict' and ' on delete '..ondelete or ''
 		local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
 		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
-			fkname(tbl, col), cols(col), ftbl or col, cols(fcol or ftbl or col), a1, a2)
+			fkname(tbl, col, suffix), cols(col), ftbl or col, cols(fcol or ftbl or col), a1, a2)
+	end
+
+	function spp.macro.fk2(self, tbl, col, ftbl, fcol, ondelete, onupdate)
+		return spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate, '2')
 	end
 
 	function spp.macro.child_fk(self, tbl, col, ftbl, fcol)
 		return spp.macro.fk(self, tbl, col, ftbl, fcol, 'cascade')
+	end
+
+	function spp.macro.child_fk2(self, tbl, col, ftbl, fcol)
+		return spp.macro.fk(self, tbl, col, ftbl, fcol, 'cascade', nil, '2')
 	end
 
 	function spp.macro.uk(self, tbl, col)

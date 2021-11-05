@@ -181,11 +181,12 @@ function sqlpp.package.mysql(spp)
 	function cmd:add_proc(name, args, code)
 		if self:proc_exists(name) then return end
 		code = outdent(code, '\t')
-		return self:query(outdent[[
-			create procedure ::name ({args})
+		return self:query(fmt(outdent[[
+			create procedure ::name (%s)
 			begin
-			{code}
-			end]], {name = name, args = args or '', code = code})
+			%s
+			end
+		]], args or '', outdent(code)), {name = name})
 	end
 
 	function cmd:drop_proc(name)
