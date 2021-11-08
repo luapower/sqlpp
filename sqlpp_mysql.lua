@@ -96,7 +96,21 @@ function sqlpp.package.mysql(spp)
 	spp.default_charset = 'utf8mb4'
 	spp.default_collation = 'utf8mb4_unicode_ci'
 
-	--existence tests for indices and columns
+	--existence tests
+
+	function cmd:schema_exists(name)
+		return self:first_row([[
+			select 1 from information_schema.schemata
+			where schema_name = ?
+		]], name or self.schema) ~= nil
+	end
+
+	function cmd:table_exists(name)
+		return self:first_row([[
+			select 1 from information_schema.tables
+			where table_schema = database() and table_name = ?
+		]], name)
+	end
 
 	function cmd:fk_exists(name)
 		return self:first_row([[
