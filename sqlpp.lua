@@ -605,19 +605,25 @@ function M.new()
 			return ret, ...
 		end
 		local msg, errno, sqlstate = ...
-		local err = errors.new('db',
-			{
+		local parse = spp.errno[errno]
+		local err
+		if parse then
+			err = errors.new('db', {
 				sqlcode = errno,
 				sqlstate = sqlstate,
-				addtraceback = true,
-			},
-			'%s%s%s', msg,
-				errno and ' ['..errno..']' or '',
-				sqlstate and ' '..sqlstate or ''
-		)
-		local parse = spp.errno[errno]
-		if parse then
+				message = msg,
+			})
 			parse(self, err)
+		else
+			err = errors.new('db', {
+					sqlcode = errno,
+					sqlstate = sqlstate,
+					addtraceback = true,
+				},
+				'%s%s%s', msg,
+					errno and ' ['..errno..']' or '',
+					sqlstate and ' '..sqlstate or ''
+			)
 		end
 		errors.raise(err)
 	end

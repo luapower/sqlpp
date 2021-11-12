@@ -363,11 +363,13 @@ function sqlpp.package.mysql(spp)
 
 	spp.errno[1364] = function(self, err)
 		err.col = err.message:match"'(.-)'"
+		err.message = _(S('error_field_required', 'Field "%s" is required'), err.col)
 		err.code = 'required'
 	end
 
 	spp.errno[1048] = function(self, err)
 		err.col = err.message:match"'(.-)'"
+		err.message = _(S('error_field_not_null', 'Field "%s" cannot be empty'), err.col)
 		err.code = 'not_null'
 	end
 
