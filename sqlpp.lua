@@ -840,10 +840,9 @@ function M.new()
 				for _,field in ipairs(def.fields) do
 					local col = field.col
 					local col_attrs = spp.col_attrs[sch..'.'..tbl..'.'..col]
-					update(field, col_attrs) --allow col_attrs to change field's type.
-					local col_type_attrs = spp.col_type_attrs[field.type]
-					local col_name_attrs = spp.col_name_attrs[col]
-					update(field, col_type_attrs, col_name_attrs)
+					update(field, col_attrs) --can change field's type.
+					update(field, spp.col_name_attrs[col]) --can change field's type.
+					update(field, spp.col_type_attrs[field.type])
 				end
 			end
 		end
@@ -988,7 +987,7 @@ function M.new()
 	function cmd:add_fk(tbl, col, ftbl, ...)
 		if self:fk_exists(fkname(tbl, col)) then return end
 		return self:query('alter table ?? add ' ..
-			spp.macro.fk(self, self:sqlname(tbl), col, self:sqlname(ftbl), ...), self:sqlname(tbl))
+			spp.macro.fk(self, self:sqlname(tbl), self:sqlname(col), self:sqlname(ftbl or col), ...), self:sqlname(tbl))
 	end
 
 	function cmd:add_uk(tbl, col)

@@ -402,6 +402,9 @@ function sqlpp.package.mysql(spp)
 	local function errno_fk(self, err, op)
 		local tbl, col, fk_tbl, fk_col =
 			err.message:match"%((.-), CONSTRAINT .- FOREIGN KEY %((.-)%) REFERENCES (.-) %((.-)%)"
+		if tbl:find'%.`#sql-' then --internal constraint from `alter table add foreign key` errors.
+			return err
+		end
 		err.table = dename(tbl)
 		err.col = dename(col)
 		err.fk_table = dename(fk_tbl)
