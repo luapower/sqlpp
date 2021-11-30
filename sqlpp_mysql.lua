@@ -2,26 +2,24 @@
 --MySQL preprocessor, postprocessor and command API.
 --Written by Cosmin Apreutesei. Public Domain.
 
+if not ... then require'schema_test'; return end
+
 local sqlpp = require'sqlpp'
 local glue = require'glue'
 local mysql = require'mysql_client'
 
 local fmt = string.format
 local add = table.insert
-local concat = table.concat
+local cat = table.concat
 
 local repl = glue.repl
 local outdent = glue.outdent
 local sortedpairs = glue.sortedpairs
 local subst = glue.subst
-
-local int_ranges = {
-	tinyint   = {-(2^ 7-1), 2^ 7, 0, 2^ 8-1},
-	shortint  = {-(2^15-1), 2^15, 0, 2^16-1},
-	mediumint = {-(2^23-1), 2^23, 0, 2^24-1},
-	int       = {-(2^31-1), 2^31, 0, 2^32-1},
-	bigint    = {-(2^51-1), 2^51, 0, 2^52-1},
-}
+local catargs = glue.catargs
+local attr = glue.attr
+local imap = glue.imap
+local index = glue.index
 
 function sqlpp.package.mysql(spp)
 
@@ -31,6 +29,7 @@ function sqlpp.package.mysql(spp)
 
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
+		self.engine = 'mysql'
 		self.schema = cn.schema
 		function self:esc(s)
 			return cn:esc(s)
@@ -47,6 +46,9 @@ function sqlpp.package.mysql(spp)
 		return cn
 	end
 	function cmd:rawconnect(opt)
+		if opt and opt.fake then
+			return {fake = true, host = '', port = '', esc = mysql.esc_utf8, engine = 'mysql'}
+		end
 		return pass(self, mysql.connect(opt))
 	end
 	function cmd:rawuse(cn)
@@ -75,6 +77,7 @@ function sqlpp.package.mysql(spp)
 		return v and 1 or 0
 	end
 
+	--TODO: mysql_client doesn't give us bool anymore.
 	spp.col_type_attrs.bool = {
 		from_server = function(self, v)
 			if v == nil then return nil end
@@ -90,6 +93,273 @@ function sqlpp.package.mysql(spp)
 			return v
 		end,
 	}
+
+	function cmd:get_reserved_words()
+		if not self.rawquery then
+			return {}
+		end
+		return index(self:assert(self:rawquery([[
+			select lower(word) from information_schema.keywords where reserved = 1
+		]], {compact = true})))
+	end
+
+	local default_display_widths = {
+		tinyint    =  3,
+		smallint   =  5,
+		mediumint  =  7,
+		int        = 10,
+		bigint     = 19,
+	}
+
+	local default_sizes = {
+		text       = 65535,
+	}
+
+	function cmd:sqltype(fld)
+		local mt = fld.mysql_type
+		if mt == 'decimal' then
+			return _('decimal(%d,%d)', fld.digits, fld.decimals)
+		elseif mt == 'tinyint'   or mt == 'smallint'
+			 or mt == 'mediumint' or mt == 'int'
+			 or mt == 'bigint'
+		then
+			local dw = fld.display_width
+			dw = dw ~= default_display_widths[mt] and dw or nil
+			return dw and _('%s(%d)', mt, dw) or mt
+		elseif mt == 'enum' then
+			return _('enum(%s)', cat(imap(fld.enum_values, function(s) return self:sqlval(s) end), ', '))
+		elseif
+			   mt == 'float'
+			or mt == 'double'
+			or mt == 'year'
+			or mt == 'date'
+			or mt == 'datetime'
+			or mt == 'timestamp'
+		then
+			return mt
+		else
+			local sz = fld.mysql_charsize
+				or ((fld.collation or fld.charset) and fld.size
+					and mysql.char_size(fld.size, fld.collation or fld.charset))
+				or fld.size
+			sz = sz ~= default_sizes[mt] and sz or nil
+			return sz and _('%s(%d)', mt, sz) or mt
+		end
+	end
+
+	--schema extraction -------------------------------------------------------
+
+	local function parse_enum(s)
+		local vals = s:match'^enum%((.-)%)$'
+		if not vals then return end
+		local t = {}
+		vals:gsub("'(.-)'", function(s)
+			t[#t+1] = s
+		end)
+		return t
+	end
+
+	function cmd:get_table_defs(sch, tbl)
+
+		local tables = {} --{sch.tbl->table}
+
+		for i, sch_tbl, grp in spp.each_group('sch_tbl', self:assert(self:rawquery(fmt([[
+			select
+				concat(table_schema, '.', table_name) sch_tbl,
+				table_name,
+				column_name,
+				ordinal_position,
+				data_type,
+				column_type,
+				column_key,
+				column_default,
+				is_nullable,
+				extra,
+				character_maximum_length,
+				character_octet_length,
+				numeric_precision,
+				numeric_scale,
+				character_set_name,
+				collation_name
+			from
+				information_schema.columns
+			where
+				]]..(catargs(' and ', '1 = 1',
+						sch and 'table_schema = %s',
+						tbl and 'table_name = %s') or '')..[[
+			order by
+				table_schema, table_name, ordinal_position
+			]], sch and self:sqlval(sch), tbl and self:sqlval(tbl)))))
+		do
+
+			local fields, pk, ai_col = {}, {}
+
+			for i, row in ipairs(grp) do
+
+				local col = row.column_name
+				local mysql_type = row.data_type
+				local auto_increment = row.extra == 'auto_increment' or nil
+				local unsigned = row.column_type:find' unsigned$' and true or nil
+
+				if auto_increment then
+					assert(not ai_col)
+					ai_col = col
+				end
+
+				local type, digits, decimals, min, max, size, display_width, has_time, padded
+
+				if mysql_type == 'decimal' then
+					digits = row.numeric_precision
+					decimals = row.numeric_scale
+					type = digits > 15 and 'decimal' or 'number'
+					if type == 'number' then
+						min, max = mysql.dec_range(digits, decimals, unsigned)
+					end
+				elseif mysql_type == 'float' then
+					type = 'number'
+					size = 4
+				elseif mysql_type == 'double' then
+					type = 'number'
+					size = 8
+				elseif mysql_type == 'year' then
+					type = 'number'
+					min, max, size = 1901, 2055, 2
+				elseif mysql_type == 'tinyint'   or mysql_type == 'smallint'
+					 or mysql_type == 'mediumint' or mysql_type == 'int'
+					 or mysql_type == 'bigint'
+				then
+					type = 'number'
+					min, max, size = mysql.int_range(mysql_type, unsigned)
+					display_width = tonumber(row.column_type:match'%((%d+)%)')
+				elseif mysql_type == 'date'
+					 or mysql_type == 'datetime'
+					 or mysql_type == 'timestamp'
+				then
+					type = 'date'
+					has_time = type ~= 'date' or nil
+				elseif mysql_type == 'enum' then
+					type = 'enum'
+				elseif mysql_type == 'char' or mysql_type == 'binary' then
+					padded = true
+				end
+
+				local field = {
+					col = col,
+					col_index = row.ordinal_position,
+					type = type,
+					mysql_type = mysql_type,
+					enum_values = parse_enum(row.column_type),
+					auto_increment = auto_increment,
+					not_null = row.is_nullable == 'NO' or nil,
+					min = min,
+					max = max,
+					digits = digits,
+					decimals = decimals,
+					unsigned = unsigned,
+					has_time = has_time,
+					padded = padded,
+					size = size or row.character_octet_length,
+					mysql_charset = row.character_set_name,
+					mysql_collation = row.collation_name,
+					mysql_charsize = row.character_maximum_length,
+				}
+				fields[i] = field
+				fields[col] = field
+
+				local default = row.column_default
+				field.mysql_default = default
+				if field.type == 'date' and default == 'CURRENT_TIMESTAMP' then
+					default = nil --don't want the client to see this.
+				end
+				field.default = default
+			end
+
+			tables[sch_tbl] = {
+				istable = true,
+				schema = sch, name = grp[1].table_name, fields = fields,
+				pk = pk, ai_col = ai_col,
+			}
+
+		end
+
+		local function row_col(row) return row.col end
+		local function row_ref_col(row) return row.ref_col end
+
+		for i, sch_tbl, indices in spp.each_group('sch_tbl', self:assert(self:rawquery(fmt([[
+			select
+				concat(s.table_schema, '.', s.table_name) sch_tbl,
+				s.table_name,
+				s.column_name col,
+				s.index_name,
+				s.collation, /* D|A */
+				cs.constraint_type,
+				kcu.referenced_table_schema ref_sch,
+				kcu.referenced_table_name ref_tbl,
+				kcu.referenced_column_name ref_col,
+				coalesce(rc.update_rule, 'no action') as onupdate,
+				coalesce(rc.delete_rule, 'no action') as ondelete
+			from
+				information_schema.statistics s /* columns for pk, uk, fk, ix */
+				left join information_schema.table_constraints cs /* cs type: pk, fk, uk */
+					 on cs.table_schema      = s.table_schema
+					and cs.table_name        = s.table_name
+					and cs.constraint_name   = s.index_name
+				left join information_schema.key_column_usage kcu /* fk ref_tbl & ref_cols */
+					 on kcu.table_schema     = s.table_schema
+					and kcu.table_name       = s.table_name
+					and kcu.column_name      = s.column_name
+					and kcu.constraint_name  = cs.constraint_name
+				left join information_schema.referential_constraints rc /* fk rules: innodb only */
+					 on rc.constraint_schema = kcu.table_schema
+					and rc.table_name        = kcu.table_name
+					and rc.constraint_name   = kcu.constraint_name
+			where
+				s.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
+				and ]]..(catargs(' and ', '1 = 1',
+						sch and 's.table_schema = %s',
+						tbl and 's.table_name = %s') or '')..[[
+			order by
+				s.table_schema, s.table_name
+			]], sch and self:sqlval(sch), tbl and self:sqlval(tbl)))))
+		do
+
+			local tbl = tables[sch_tbl]
+
+			for i, ix_name, grp in spp.each_group('index_name', indices) do
+				local cs_type = grp[1].constraint_type
+				if cs_type == 'PRIMARY KEY' then
+					tbl.pk = imap(grp, row_col)
+				elseif cs_type == 'FOREIGN KEY' then
+					local ref_sch = grp[1].ref_sch
+					local ref_tbl = (ref_sch ~= sch and ref_sch..'.' or '')..grp[1].ref_tbl
+					if #grp == 1 then
+						local field = tbl.fields[grp[1].col]
+						field.ref_table = ref_tbl
+						field.ref_col = grp[1].ref_col
+					end
+					attr(tbl, 'fks')[ix_name] = {
+						ref_table = ref_tbl,
+						cols      = imap(grp, row_col),
+						ref_cols  = imap(grp, row_ref_col),
+						onupdate  = repl(grp[1].onupdate:lower(), 'no action', nil),
+						ondelete  = repl(grp[1].ondelete:lower(), 'no action', nil),
+					}
+				elseif cs_type == 'UNIQUE' then
+					attr(tbl, 'uks')[ix_name] = {
+						cols = imap(grp, row_col),
+					}
+				else --index
+					attr(tbl, 'ixs')[ix_name] = {
+						cols = imap(grp, row_col),
+						desc = grp[1].collation == 'D' or nil,
+					}
+				end
+			end
+
+		end
+
+		return tables
+	end
 
 	--DDL commands ------------------------------------------------------------
 
@@ -223,7 +493,7 @@ function sqlpp.package.mysql(spp)
 					signal sqlstate '45000' set message_text = 'Read/only column: %s';
 				end if;]], '\t'), col, col, col)
 		end
-		return concat(code)
+		return cat(code)
 	end
 
 	function cmd:add_column_locks(tbl, cols)
@@ -236,127 +506,6 @@ function sqlpp.package.mysql(spp)
 
 	function cmd:drop_column_locks(tbl)
 		return self:drop_trigger('col_locks', tbl, 'before update')
-	end
-
-	--table definitions -------------------------------------------------------
-
-	local function parse_enum(s)
-		local vals = s:match'^enum%((.-)%)$'
-		if not vals then return end
-		local t = {}
-		vals:gsub("'(.-)'", function(s)
-			t[#t+1] = s
-		end)
-		return t
-	end
-
-	function cmd:get_table_def(sch, tbl)
-
-		local fields, pk, ai_col = {}, {}
-
-		for i,row in ipairs(self:rawquery(fmt([[
-			select
-				column_name,
-				data_type,
-				column_type,
-				column_key,
-				column_default,
-				is_nullable,
-				extra,
-				character_maximum_length,
-				numeric_precision,
-				numeric_scale,
-				character_set_name,
-				collation_name
-			from
-				information_schema.columns
-			where
-				table_schema = %s and table_name = %s
-			]], self:sqlval(sch), self:sqlval(tbl))))
-		do
-
-			local col = row.column_name
-			local type = row.data_type
-			local auto_increment = row.extra == 'auto_increment' or nil
-			local unsigned = row.column_type:find' unsigned$' and true or nil
-
-			if row.column_type == 'tinyint(1)' then --bool by convention
-				type = 'bool'
-				row.numeric_precision = nil
-				row.numeric_scale = nil
-			end
-
-			if auto_increment then
-				assert(not ai_col)
-				ai_col = col
-			end
-
-			if row.column_key == 'PRI' then
-				pk[#pk+1] = col
-			end
-
-			local digits = row.numeric_precision
-			local decimals = row.numeric_scale
-			local min, max = mysql.num_range(type, unsigned, digits, decimals)
-
-			local field = {
-				col = col,
-				type = type,
-				enum_values = parse_enum(row.column_type),
-				auto_increment = auto_increment,
-				not_null = row.is_nullable == 'NO' or nil,
-				min = min,
-				max = max,
-				decimals = decimals,
-				unsigned = unsigned,
-				maxlen = row.character_maximum_length,
-				charset = row.character_set_name,
-				collation = row.collation_name,
-				pri_key    = row.column_key == 'PRI' or nil,
-				unique_key = row.column_key == 'UNI' or nil,
-				indexed    = row.column_key == 'MUL' or nil,
-			}
-			fields[i] = field
-			fields[col] = field
-
-			field.default = self.rawconn.to_lua(row.column_default, field)
-
-			--TODO: find a more general way to clear off non-constant defaults.
-			if field.default then
-				if type == 'datetime' or type == 'date' or type == 'timestamp' then
-					if field.default:find'^CURRENT_TIMESTAMP' then
-						field.default = nil
-					end
-				end
-			end
-
-		end
-
-		for i, name, cols in spp.each_group('name', self:rawquery(fmt([[
-			select
-				constraint_name name,
-				column_name col,
-				referenced_table_schema ref_sch,
-				referenced_table_name ref_tbl,
-				referenced_column_name ref_col
-			from
-				information_schema.key_column_usage
-			where
-				table_schema = %s and table_name = %s
-				and referenced_column_name is not null
-			]], self:sqlval(sch), self:sqlval(tbl))))
-		do
-			if #cols == 1 then
-				local row = cols[1]
-				local field = fields[row.col:lower()]
-				field.ref_table = (row.ref_sch..'.'..row.ref_tbl):lower()
-				field.ref_col = row.ref_col:lower()
-			else
-				--TODO: comp-key fks
-			end
-		end
-
-		return {schema = sch, name = tbl, fields = fields, pk = pk, ai_col = ai_col}
 	end
 
 	--error message parsing ---------------------------------------------------
@@ -417,6 +566,7 @@ function sqlpp.package.mysql(spp)
 
 end
 
+--TODO: generate these from schema.
 function sqlpp.package.mysql_domains(spp)
 	spp.subst'id       int unsigned'
 	spp.subst'pk       int unsigned primary key auto_increment'
@@ -442,74 +592,4 @@ function sqlpp.package.mysql_domains(spp)
 	spp.subst'lang     char(2) character set ascii'
 	spp.subst'currency char(3) character set ascii'
 	spp.subst'country  char(2) character set ascii'
-end
-
-if not ... then
-
-	local spp = sqlpp.new()
-	spp.require'mysql'
-
-	if false then
-		pp(spp.query(outdent[[
-			select
-				{verbatim}, '?', :foo, ::bar,
-			from
-			#if false
-				no see
-			#else
-				see
-			#endif
-		]], {
-			verbatim = 'can be anything',
-			foo = 'FOO',
-			bar = 'BAR.BAZ',
-		}, 'xxx'))
-	end
-
-	local sock = require'sock'
-	sock.run(function()
-
-		local cmd = spp.connect{
-			host = '127.0.0.1',
-			port = 3307,
-			user = 'root',
-			password = 'root',
-			schema = 'sp',
-			collation = 'server',
-		}
-
-		spp.table_attrs['sp.val'] = {text = 'attribute value'}
-		spp.table_attrs['sp.attr'] = {text = 'attribute'}
-		spp.table_attrs['sp.combi_val'] = {text = 'attribute value combination'}
-
-		if false then
-			pp(cmd:table_def'usr')
-		end
-
-		if false then
-			pp(cmd:query'select * from val limit 1; select * from attr limit 1')
-		end
-
-		if false then
-			local stmt = assert(cmd:prepare('select * from val where val = :val'))
-			pp(stmt:exec{val = 2})
-		end
-
-		if false then
-			pp(cmd:query'insert into val (val, attr) values (100000000, 10000000)')
-		end
-
-		if true then
-			pp(cmd:query'delete from val where val = 1')
-		end
-
-		if false then
-			cmd:insert_rows('val',
-				{{note1 = 'x', val1 = 'y'}},
-				{note = 'note1', val = 'val1'}
-			)
-		end
-
-	end)
-
 end

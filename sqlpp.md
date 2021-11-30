@@ -28,6 +28,7 @@ __Preprocessing__
 `cmd:sqlrows(rows[, indent]) -> s`              format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
 `spp.tsv_rows(opt, s) -> rows`                  convert a tab-separated list to a list of rows
 `cmd:sqltsv(opt, s) -> s`                       format a tab-separated list
+`cmd:sqldiff(o, opt)`                           format a [schema] diff object
 __Query execution__
 `cmd:query([opt], sql, ...) -> rows`            query
 `cmd:first_row([opt], sql, ...) -> rows`        query and return the first row
@@ -46,7 +47,7 @@ __Grouping result rowsets__
 `spp.groups(col, rows|groups) -> groups`        group rows
 `spp.each_group(col, rows|groups) -> iter`      group rows and iterate groups
 __DDL commands__
-`cmd:table_def('[schema.]table') -> t`          get table definition (cached)
+`cmd:table_def(['[SCHEMA.]TABLE|*']) -> t`      get table definition (cached)
 `cmd:create_database(name)`                     create database
 `cmd:drop_table(name)`                          drop table
 `cmd:drop_tables('T1 T2 ...')`                  drop multiple tables
@@ -71,8 +72,8 @@ __MDL commands__
 `cmd:update_row(tbl, vals, col_map, [filter])`  update row
 `cmd:delete_row(tbl, vals, col_map, [filter])`  delete row
 __Module system__
-`function spp.package.NAME(spp) end`            extend the preprocessor with a module
-`spp.require(name)`                             load a module into the preprocessor instance
+`function sqlpp.package.NAME(spp) end`          extend the preprocessor with a module
+`spp.import(module)`                            import sqlpp module
 __Modules__
 `require'sqlpp_mysql'`                          load the code for the MySQL module
 `spp.require'mysql'`                            load the MySQL module
@@ -158,10 +159,10 @@ macros.
 
 ## Module system
 
-## `function spp.package.NAME(spp) end`
+## `function sqlpp.package.NAME(spp) end`
 
 Extend the preprocessor with a module, available to all preprocessor
-instances to be loaded with `spp.require()`.
+instances to be loaded with `spp.import()`.
 
 ### `spp.require(name)`
 

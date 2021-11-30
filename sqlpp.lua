@@ -2,12 +2,14 @@
 --SQL preprocessor, postprocessor and command API.
 --Written by Cosmin Apreutesei. Public Domain.
 
+if not ... then require'schema_test'; return end
+
 local glue = require'glue'
 local errors = require'errors'
 
 local fmt = string.format
 local add = table.insert
-local concat = table.concat
+local cat = table.concat
 local char = string.char
 
 local assertf = glue.assert
@@ -71,7 +73,7 @@ function M.new()
 		else
 			add(t, s:sub(i))
 		end
-		return concat(t)
+		return cat(t)
 	end
 
 	--conditional compilation -------------------------------------------------
@@ -137,7 +139,7 @@ function M.new()
 			end
 		end
 		assert(level == 1, '#endif missing')
-		return concat(t, '\n')
+		return cat(t, '\n')
 	end
 
 	--quoting -----------------------------------------------------------------
@@ -153,8 +155,8 @@ function M.new()
 		end,
 	})
 
-	local _ = spp.keyword.null
-	local _ = spp.keyword.default
+	do local _ = spp.keyword.null end
+	do local _ = spp.keyword.default end
 
 	function cmd:sqlstring(s)
 		return "'"..self:esc(s).."'"
@@ -169,16 +171,16 @@ function M.new()
 	end
 
 	--NOTE: don't use dots in db names, table names and column names!
-	local function add_ticks(s)
-		return '`'..trim(s)..'`'
-	end
 	function cmd:sqlname(s)
 		s = trim(s)
 		assert(s, 'sql name missing')
 		if s:sub(1, 1) == '`' then
 			return s
 		end
-		return s:gsub('[^%.]+', add_ticks)
+		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
+		return s:gsub('[^%.]+', function(s)
+			return self:is_reserved_word(s) and '`'..trim(s)..'`' or s
+		end)
 	end
 
 	function cmd:sqlval(v, field)
@@ -199,7 +201,7 @@ function M.new()
 				for i,v in ipairs(v) do
 					t[i] = self:sqlval(v, field)
 				end
-				return concat(t, ', ')
+				return cat(t, ', ')
 			else --empty list: good for 'in (?)' but NOT GOOD for `not in (?)` !!!
 				return 'null'
 			end
@@ -266,7 +268,7 @@ function M.new()
 			end), names
 	end
 
-	function cmd:sqlargs(sql, vals)
+	function cmd:sqlargs(sql, vals) --not used
 		local i = 0
 		return (sql:gsub('%?%?', function() -- ??
 				i = i + 1
@@ -433,6 +435,122 @@ function M.new()
 			and true or false
 	end
 
+	--schema diff formatting --------------------------------------------------
+
+	local function cols(self, t)
+		return cat(imap(t, function(s) return self:sqlname(s) end), ', ')
+	end
+
+	function cmd:sqlcol(fld, tbl)
+		return _('%-16s %-12s %s', self:sqlname(fld.col), self:sqltype(fld),
+			catargs(' ',
+				fld.unsigned and ' unsigned' or nil,
+				fld[COLLATION] and fld[COLLATION] ~= self.rawconn.collation
+					and ' collate '..fld[COLLATION] or nil,
+				fld.not_null and ' not null' or nil,
+				tbl.ai_col == fld.col and ' auto_increment' or nil,
+				tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and ' primary key' or nil,
+				fld[DEFAULT] and ' default '..self:sqlval(fld[DEFAULT])
+					or (fld.default and ' default '..self:sqlval(fld.default)) or nil,
+				fld.invisible and ' invisible' or nil,
+				fld.comment and ' comment '..self:sqlval(fld.comment) or nil
+			) or '')
+	end
+
+	function cmd:sqlpk(pk)
+		return _('primary key (%s)', cols(self, pk))
+	end
+
+	function cmd:sqluk(name, uk)
+		return _('constraint %s unique key (%s)', self:sqlname(name), cols(self, uk.cols))
+	end
+
+	function cmd:sqlindex(name, ix)
+		return _('index %s (%s)%s', self:sqlname(name),
+			cols(self, ix.cols), ix.desc and ' desc' or '')
+	end
+
+	function cmd:sqlfk(name, fk)
+		local ondelete = fk.ondelete or 'no action'
+		local onupdate = fk.onupdate or 'cascade'
+		local a1 = ondelete ~= 'no action' and ' on delete '..ondelete or ''
+		local a2 = onupdate ~= 'no action' and ' on update '..onupdate or ''
+		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
+			self:sqlname(name), cols(self, fk.cols), self:sqlname(fk.ref_table),
+			cols(self, fk.ref_cols), a1, a2)
+	end
+
+	function cmd:sql_create_table(t, schema)
+		local dt = {}
+		local DEFAULT = self.engine..'_default'
+		local COLLATION = self.engine..'_collation'
+		for i,fld in ipairs(t.fields) do
+			dt[i] = self:sqlcol(fld, t)
+		end
+		if t.pk and #t.pk > 1 then
+			add(dt, self:sqlpk(t.pk))
+		end
+		if t.uks then
+			for name, uk in sortedpairs(t.uks) do
+				add(dt, self:sqluk(name, uk))
+			end
+		end
+		if t.ixs then
+			for name, ix in sortedpairs(t.ixs) do
+				add(dt, self:sqlindex(name, ix))
+			end
+		end
+		if t.fks then
+			for name, fk in sortedpairs(t.fks) do
+				add(dt, self:sqlfk(name, fk))
+			end
+		end
+		return _('create table %s (\n\t%s\n)', self:sqlname(t.name), cat(dt, ',\n\t'))
+	end
+
+	function cmd:sqldiff(diff)
+		local dt = {}
+		if diff.tables then
+			for i,cmd in ipairs(diff.tables) do
+				local op, tbl, t = unpack(cmd, 1, 3)
+				if op == 'add' then
+					add(dt, self:sql_create_table(t))
+				elseif op == 'remove' then
+					add(dt, _('drop table %s', self:sqlname(tbl)))
+				elseif op == 'update' then
+					if t.fields then
+						for i,cmd in ipairs(t.fields) do
+							local op, col, fld = unpack(cmd, 1, 3)
+							if op == 'add' then
+								add(dt, _('alter table %s add column %s',
+									self:sqlname(tbl),
+									self:sqlcol(fld)
+									--
+								))
+							elseif op == 'remove' then
+								add(dt, _('alter table %s drop column %s',
+									self:sqlname(tbl),
+									self:sqlname(fld.col)
+								))
+							elseif op == 'update' then
+								add(dt, _('alter table %s modify column %s',
+									self:sqlname(tbl),
+									self:sqlcol(fld)
+								))
+							end
+						end
+					end
+					if t.pk then
+						add(dt, _('alter table %s drop primary key, add %s',
+							self:sqlpk(t.pk)
+						))
+					end
+				end
+			end
+		end
+		return dt
+	end
+
 	--row list formatting -----------------------------------------------------
 
 	function cmd:sqlrows(rows, opt) --{{v1,...},...} -> '(v1,...),\n (v2,...)'
@@ -480,9 +598,9 @@ function M.new()
 			for i,s in ipairs(srow) do
 				t[i] = glue.pad(s, max_sizes[i], ' ', pad_dirs[i])
 			end
-			dt[ri] = prefix..concat(t, ', ')..')'
+			dt[ri] = prefix..cat(t, ', ')..')'
 		end
-		return concat(dt, ',\n')
+		return cat(dt, ',\n')
 	end
 
 	--tab-separated rows parsing ----------------------------------------------
@@ -585,15 +703,16 @@ function M.new()
 
 	--module system -----------------------------------------------------------
 
-	spp.package = {}
+	spp.loaded = {}
 
-	function spp.require(pkg)
+	function spp.import(pkg)
 		for pkg in pkg:gmatch'[^%s]+' do
-			if not spp.package[pkg] then
+			if not spp.loaded[pkg] then
 				assertf(M.package[pkg], 'no sqlpp module: %s', pkg)(spp)
-				spp.package[pkg] = true
+				spp.loaded[pkg] = true
 			end
 		end
+		return self
 	end
 
 	--command API -------------------------------------------------------------
@@ -630,14 +749,17 @@ function M.new()
 
 	function init(self, rawconn)
 		self.rawconn = rawconn
-		self.schema_cache_key = rawconn.host..':'..rawconn.port
-		self:schema_changed()
+		self.server_cache_key = rawconn.host..':'..rawconn.port
 		return self
 	end
 
 	function spp.connect(opt)
 		local self = update({}, cmd)
 		return init(self, self:assert(self:rawconnect(opt)))
+	end
+
+	function cmd:close()
+		self:assert(self.rawconn:close())
 	end
 
 	function cmd:use(schema)
@@ -659,9 +781,7 @@ function M.new()
 		for i,f in ipairs(fields) do
 			if opt.get_table_defs and f.table and f.schema then
 				local tdef = self:table_def(f.schema..'.'..f.table)
-				if tdef then
-					update(f, tdef.fields[f.col])
-				end
+				update(f, tdef.fields[f.col])
 			end
 			update(f, fa and fa[f.name])
 		end
@@ -802,51 +922,93 @@ function M.new()
 
 	--cached table defs -------------------------------------------------------
 
-	local schema_cache
+	local server_caches = {}
+
+	function cmd:server_cache()
+		return attr(server_caches, self.server_cache_key)
+	end
+
+	function cmd:is_reserved_word(s)
+		local t = self:server_cache()
+		local rt = t.reserved_words
+		if not rt then
+			rt = self:get_reserved_words()
+			t.reserved_words = rt
+		end
+		return rt[s]
+	end
 
 	function cmd:schema_changed()
-		schema_cache = {}
+		self:server_cache().schema = {}
 	end
 
 	function cmd:schema_cache()
-		return attr(schema_cache, self.schema_cache_key)
+		return attr(self:server_cache(), 'schema')
+	end
+
+	spp.table_attrs = {} --{sch.tbl->attrs}
+	spp.col_attrs = {} --{sch.tbl.col->attrs}
+	spp.mysql_col_type_attrs = {} --{col_type->attrs}
+	spp.col_type_attrs = {} --{col_type->attrs}
+	spp.col_name_attrs = {} --{col_name->attrs}
+
+	function cmd:tables()
+		return self:exec_with_options({to_array=1}, 'show tables')
 	end
 
 	local function strip_ticks(s)
 		return s:gsub('^`', ''):gsub('`$', '')
 	end
-	local function sch_tbl_arg(self, sch_tbl)
-		local sch, tbl = sch_tbl:match'^(.-)%.(.*)$'
-		if not sch then
-			sch, tbl = assert(self.schema), sch_tbl
-		end
-		return strip_ticks(sch), strip_ticks(tbl)
-	end
-
-	spp.table_attrs = {} --{sch.tbl->attrs}
-	spp.col_attrs = {} --{sch.tbl.col->attrs}
-	spp.col_type_attrs = {} --{col_type->attrs}
-	spp.col_name_attrs = {} --{col_name->attrs}
-
-	function cmd:table_def(sch_tbl)
-		local cache = self:schema_cache()
-		local def = cache[sch_tbl]
-		if not def then
-			local sch, tbl = sch_tbl_arg(self, sch_tbl)
-			def = self:get_table_def(sch, tbl)
-			update(def, spp.table_attrs[sch..'.'..tbl])
-			if def then
-				cache[sch_tbl] = def
-				for _,field in ipairs(def.fields) do
-					local col = field.col
-					local col_attrs = spp.col_attrs[sch..'.'..tbl..'.'..col]
-					update(field, col_attrs) --can change field's type.
-					update(field, spp.col_name_attrs[col]) --can change field's type.
-					update(field, spp.col_type_attrs[field.type])
-				end
+	function cmd:table_defs(sch_tbl) --nil | TBL | SCH.TBL | TBL | SCH.* | *
+		local sch, tbl
+		if sch_tbl then --[SCH.]TBL
+			sch, tbl = sch_tbl:match'^(.-)%.(.*)$'
+			if not sch then --TBL
+				sch, tbl = assert(self.schema), sch_tbl
+			end
+			if tbl == '*' then --all tables
+				tbl = nil
 			end
 		end
-		return def
+		local cache = self:schema_cache()
+		if sch and tbl then --single table, check the cache.
+			sch = strip_ticks(sch)
+			tbl = strip_ticks(tbl)
+			sch_tbl = sch..'.'..tbl
+			local def = cache[sch_tbl]
+			if def then
+				return {[sch_tbl] = def}
+			end
+		end
+		local defs = self:get_table_defs(sch, tbl)
+		for sch_tbl, def in pairs(defs) do
+			update(def, spp.table_attrs[sch_tbl])
+			for _,field in ipairs(def.fields) do
+				local col = field.col
+				local col_attrs = spp.col_attrs[sch_tbl..'.'..col]
+				update(field, col_attrs) --can change field's type.
+				update(field, spp.col_name_attrs[col]) --can change field's type.
+				update(field, spp.col_type_attrs[field.type])
+				update(field, spp.mysql_col_type_attrs[field.mysql_type])
+			end
+			cache[sch_tbl] = def
+		end
+		return defs
+	end
+
+	function cmd:table_def(sch_tbl)
+		for k,def in pairs(self:table_defs(sch_tbl)) do
+			return def
+		end
+	end
+
+	function cmd:extract_schema(sch_tbl)
+		local schema = require'schema'
+		local sc = schema.new()
+		for sch_tbl, tbl in pairs(self:table_defs(sch_tbl)) do
+			sc.tables[tbl.name] = tbl
+		end
+		return sc
 	end
 
 	--DDL macros --------------------------------------------------------------
@@ -867,32 +1029,24 @@ function M.new()
 			:gsub(' asc ', ''):gsub(' desc ', '')
 	end
 
-	local function indexname(type, tbl, col, suffix)
-		return fmt('%s_%s_%s%s', type, dename(tbl), dename(cols(col, '_')), suffix or '')
+	local function indexname(type, tbl, col)
+		return fmt('%s_%s__%s', type, dename(tbl), dename(cols(col, '_')))
 	end
-	local function fkname(tbl, col, suffix) return indexname('fk', tbl, col, suffix) end
-	local function ukname(tbl, col, suffix) return indexname('uk', tbl, col, suffix) end
-	local function ixname(tbl, col, suffix) return indexname('ix', tbl, deixcol(col), suffix) end
+	local function fkname(tbl, col) return indexname('fk', tbl, col) end
+	local function ukname(tbl, col) return indexname('uk', tbl, col) end
+	local function ixname(tbl, col) return indexname('ix', tbl, deixcol(col)) end
 
-	function spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate, suffix)
-		ondelete = ondelete or 'restrict'
+	function spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate)
+		ondelete = ondelete or 'no action'
 		onupdate = onupdate or 'cascade'
-		local a1 = ondelete ~= 'restrict' and ' on delete '..ondelete or ''
-		local a2 = onupdate ~= 'restrict' and ' on update '..onupdate or ''
+		local a1 = ondelete ~= 'no action' and ' on delete '..ondelete or ''
+		local a2 = onupdate ~= 'no action' and ' on update '..onupdate or ''
 		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
-			fkname(tbl, col, suffix), cols(col), ftbl or col, cols(fcol or ftbl or col), a1, a2)
-	end
-
-	function spp.macro.fk2(self, tbl, col, ftbl, fcol, ondelete, onupdate)
-		return spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate, '2')
+			fkname(tbl, col), cols(col), ftbl or col, cols(fcol or ftbl or col), a1, a2)
 	end
 
 	function spp.macro.child_fk(self, tbl, col, ftbl, fcol)
 		return spp.macro.fk(self, tbl, col, ftbl, fcol, 'cascade')
-	end
-
-	function spp.macro.child_fk2(self, tbl, col, ftbl, fcol)
-		return spp.macro.fk(self, tbl, col, ftbl, fcol, 'cascade', nil, '2')
 	end
 
 	function spp.macro.uk(self, tbl, col)
@@ -910,7 +1064,7 @@ function M.new()
 
 	function spp.macro.enum(self, ...)
 		return fmt('enum (%s) character set ascii',
-			concat(imap(pack(...), function(s) return self:sqlstring(s) end), ', '))
+			cat(imap(pack(...), function(s) return self:sqlstring(s) end), ', '))
 	end
 
 	--DDL commands ------------------------------------------------------------
@@ -1059,7 +1213,7 @@ function M.new()
 			if i > 1 then add(t, ' and ') end
 			add(t, self:sqlname(col)..' = '..self:sqlval(v, field))
 		end
-		local sql = concat(t)
+		local sql = cat(t)
 		if security_filter then
 			sql = '('..sql..') and ('..security_filter..')'
 		end
@@ -1077,7 +1231,7 @@ function M.new()
 				end
 			end
 		end
-		return #t > 0 and concat(t, ',\n\t')
+		return #t > 0 and cat(t, ',\n\t')
 	end
 
 	local function pass(ret, ...)
@@ -1157,7 +1311,7 @@ function M.new()
 		for i,s in ipairs(glue.keys(col_map, true)) do
 			t[i] = self:sqlname(s)
 		end
-		local cols_sql = concat(t, ', ')
+		local cols_sql = cat(t, ', ')
 		local sql = fmt(outdent[[
 			insert into %s
 				(%s)
