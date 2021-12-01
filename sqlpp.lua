@@ -442,18 +442,17 @@ function M.new()
 	end
 
 	function cmd:sqlcol(fld, tbl)
-		return _('%-16s %-12s %s', self:sqlname(fld.col), self:sqltype(fld),
+		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
 			catargs(' ',
-				fld.unsigned and ' unsigned' or nil,
+				fld.unsigned and 'unsigned' or nil,
 				fld[COLLATION] and fld[COLLATION] ~= self.rawconn.collation
-					and ' collate '..fld[COLLATION] or nil,
-				fld.not_null and ' not null' or nil,
-				tbl.ai_col == fld.col and ' auto_increment' or nil,
-				tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and ' primary key' or nil,
-				fld[DEFAULT] and ' default '..self:sqlval(fld[DEFAULT])
-					or (fld.default and ' default '..self:sqlval(fld.default)) or nil,
-				fld.invisible and ' invisible' or nil,
-				fld.comment and ' comment '..self:sqlval(fld.comment) or nil
+					and 'collate '..fld[COLLATION] or nil,
+				fld.not_null and 'not null' or nil,
+				tbl.ai_col == fld.col and 'auto_increment' or nil,
+				tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
+				fld[DEFAULT] and 'default '..self:sqlval(fld[DEFAULT])
+					or (fld.default and 'default '..self:sqlval(fld.default)) or nil,
+				fld.comment and 'comment '..self:sqlval(fld.comment) or nil
 			) or '')
 	end
 
@@ -462,11 +461,11 @@ function M.new()
 	end
 
 	function cmd:sqluk(name, uk)
-		return _('constraint %s unique key (%s)', self:sqlname(name), cols(self, uk.cols))
+		return _('constraint %-20s unique key (%s)', self:sqlname(name), cols(self, uk.cols))
 	end
 
 	function cmd:sqlindex(name, ix)
-		return _('index %s (%s)%s', self:sqlname(name),
+		return _('index %-25s (%s)%s', self:sqlname(name),
 			cols(self, ix.cols), ix.desc and ' desc' or '')
 	end
 
@@ -475,12 +474,26 @@ function M.new()
 		local onupdate = fk.onupdate or 'cascade'
 		local a1 = ondelete ~= 'no action' and ' on delete '..ondelete or ''
 		local a2 = onupdate ~= 'no action' and ' on update '..onupdate or ''
-		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
+		return _('constraint %-20s foreign key (%s) references %s (%s)%s%s',
 			self:sqlname(name), cols(self, fk.cols), self:sqlname(fk.ref_table),
 			cols(self, fk.ref_cols), a1, a2)
 	end
 
-	function cmd:sql_create_table(t, schema)
+	function cmd:sqltrigger(tbl, name, trg)
+		local CODE = self.engine..'_code'
+		return _('trigger %s %s %s on %s for each row\n%s',
+			self:sqlname(name), trg.at, trg.op, self:sqlname(tbl.name), trg[CODE])
+	end
+
+	function cmd:sqlproc(name, proc)
+		local CODE = self.engine..'_code'
+		local args = {}; for i,arg in ipairs(proc.args) do
+			args[i] = _('%s %s %s', arg.mode, arg.name, self:sqltype(arg))
+		end
+		return _('procedure %s (\n\t%s\n)\n%s', name, cat(args, ',\n\t'), proc[CODE])
+	end
+
+	function cmd:sql_create_table(t)
 		local dt = {}
 		local DEFAULT = self.engine..'_default'
 		local COLLATION = self.engine..'_collation'
@@ -508,6 +521,21 @@ function M.new()
 		return _('create table %s (\n\t%s\n)', self:sqlname(t.name), cat(dt, ',\n\t'))
 	end
 
+	function cmd:sql_create_triggers(tbl)
+		local dt = {}
+		if tbl.triggers then
+			local function cmp_trg(a, b)
+				if a.op ~= b.op then return a.op < b.op end
+				if a.at ~= b.at then return a.at < b.at end
+				return a.pos < b.pos
+			end
+			for name, trg in sortedpairs(tbl.triggers, cmd_trg) do
+				add(dt, 'create '..self:sqltrigger(tbl, name, trg))
+			end
+		end
+		return cat(dt, ';\n')
+	end
+
 	function cmd:sqldiff(diff)
 		local dt = {}
 		if diff.tables then
@@ -515,6 +543,7 @@ function M.new()
 				local op, tbl, t = unpack(cmd, 1, 3)
 				if op == 'add' then
 					add(dt, self:sql_create_table(t))
+					add(dt, self:sql_create_triggers(t))
 				elseif op == 'remove' then
 					add(dt, _('drop table %s', self:sqlname(tbl)))
 				elseif op == 'update' then
@@ -545,6 +574,18 @@ function M.new()
 							self:sqlpk(t.pk)
 						))
 					end
+				end
+			end
+		end
+		if diff.procs then
+			for i,cmd in ipairs(diff.procs) do
+				local op, proc, t = unpack(cmd, 1, 3)
+				if op == 'add' then
+					add(dt, 'create '..self:sqlproc(proc, t))
+				elseif op == 'remove' then
+					add(dt, _('drop procedure %s', self:sqlname(proc)))
+				elseif op == 'update' then
+					pp(proc)
 				end
 			end
 		end
@@ -920,7 +961,7 @@ function M.new()
 		return pass(glue.pcall(f, ...))
 	end
 
-	--cached table defs -------------------------------------------------------
+	--schema cache ------------------------------------------------------------
 
 	local server_caches = {}
 
@@ -959,7 +1000,7 @@ function M.new()
 	local function strip_ticks(s)
 		return s:gsub('^`', ''):gsub('`$', '')
 	end
-	function cmd:table_defs(sch_tbl) --nil | TBL | SCH.TBL | TBL | SCH.* | *
+	function cmd:table_defs(sch_tbl, opt) --nil | TBL | SCH.TBL | TBL | SCH.* | *
 		local sch, tbl
 		if sch_tbl then --[SCH.]TBL
 			sch, tbl = sch_tbl:match'^(.-)%.(.*)$'
@@ -980,7 +1021,7 @@ function M.new()
 				return {[sch_tbl] = def}
 			end
 		end
-		local defs = self:get_table_defs(sch, tbl)
+		local defs = self:get_table_defs(sch, tbl, opt)
 		for sch_tbl, def in pairs(defs) do
 			update(def, spp.table_attrs[sch_tbl])
 			for _,field in ipairs(def.fields) do
@@ -996,18 +1037,19 @@ function M.new()
 		return defs
 	end
 
-	function cmd:table_def(sch_tbl)
-		for k,def in pairs(self:table_defs(sch_tbl)) do
+	function cmd:table_def(sch_tbl, opt)
+		for k,def in pairs(self:table_defs(sch_tbl, opt)) do
 			return def
 		end
 	end
 
-	function cmd:extract_schema(sch_tbl)
+	function cmd:extract_schema(sch)
 		local schema = require'schema'
 		local sc = schema.new()
-		for sch_tbl, tbl in pairs(self:table_defs(sch_tbl)) do
+		for sch_tbl, tbl in pairs(self:table_defs(sch..'.*', {all=1})) do
 			sc.tables[tbl.name] = tbl
 		end
+		sc.procs = self:get_procs(sch)[sch]
 		return sc
 	end
 

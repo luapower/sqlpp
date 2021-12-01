@@ -159,8 +159,67 @@ function sqlpp.package.mysql(spp)
 		return t
 	end
 
-	function cmd:get_table_defs(sch, tbl)
+	--input: data_type, column_type, numeric_precision, numeric_scale,
+	--  ordinal_position, character_octet_length, character_set_name,
+	--  collation_name, character_maximum_length.
+	local function field_type_attrs(t)
+		local mt = t.data_type
+		local type, digits, decimals, min, max, size, display_width, has_time, padded
+		if mt == 'decimal' then
+			digits = t.numeric_precision
+			decimals = t.numeric_scale
+			type = digits > 15 and 'decimal' or 'number'
+			if type == 'number' then
+				min, max = mysql.dec_range(digits, decimals, unsigned)
+			end
+		elseif mt == 'float' then
+			type = 'number'
+			size = 4
+		elseif mt == 'double' then
+			type = 'number'
+			size = 8
+		elseif mt == 'year' then
+			type = 'number'
+			min, max, size = 1901, 2055, 2
+		elseif mt == 'tinyint'   or mt == 'smallint'
+			 or mt == 'mediumint' or mt == 'int'
+			 or mt == 'bigint'
+		then
+			type = 'number'
+			min, max, size = mysql.int_range(mt, unsigned)
+			display_width = tonumber(t.column_type:match'%((%d+)%)')
+		elseif mt == 'date'
+			 or mt == 'datetime'
+			 or mt == 'timestamp'
+		then
+			type = 'date'
+			has_time = type ~= 'date' or nil
+		elseif mt == 'enum' then
+			type = 'enum'
+		elseif mt == 'char' or mt == 'binary' then
+			padded = true
+		end
+		return {
+			type = type,
+			mysql_type = mt,
+			enum_values = parse_enum(t.column_type),
+			min = min,
+			max = max,
+			digits = digits,
+			decimals = decimals,
+			unsigned = unsigned,
+			has_time = has_time,
+			padded = padded,
+			size = size or t.character_octet_length,
+			mysql_charset = t.character_set_name,
+			mysql_collation = t.collation_name,
+			mysql_charsize = t.character_maximum_length,
+		}
+	end
 
+	function cmd:get_table_defs(sch, tbl, opt)
+
+		opt = opt or empty
 		local tables = {} --{sch.tbl->table}
 
 		for i, sch_tbl, grp in spp.each_group('sch_tbl', self:assert(self:rawquery(fmt([[
@@ -197,7 +256,6 @@ function sqlpp.package.mysql(spp)
 			for i, row in ipairs(grp) do
 
 				local col = row.column_name
-				local mysql_type = row.data_type
 				local auto_increment = row.extra == 'auto_increment' or nil
 				local unsigned = row.column_type:find' unsigned$' and true or nil
 
@@ -206,63 +264,11 @@ function sqlpp.package.mysql(spp)
 					ai_col = col
 				end
 
-				local type, digits, decimals, min, max, size, display_width, has_time, padded
-
-				if mysql_type == 'decimal' then
-					digits = row.numeric_precision
-					decimals = row.numeric_scale
-					type = digits > 15 and 'decimal' or 'number'
-					if type == 'number' then
-						min, max = mysql.dec_range(digits, decimals, unsigned)
-					end
-				elseif mysql_type == 'float' then
-					type = 'number'
-					size = 4
-				elseif mysql_type == 'double' then
-					type = 'number'
-					size = 8
-				elseif mysql_type == 'year' then
-					type = 'number'
-					min, max, size = 1901, 2055, 2
-				elseif mysql_type == 'tinyint'   or mysql_type == 'smallint'
-					 or mysql_type == 'mediumint' or mysql_type == 'int'
-					 or mysql_type == 'bigint'
-				then
-					type = 'number'
-					min, max, size = mysql.int_range(mysql_type, unsigned)
-					display_width = tonumber(row.column_type:match'%((%d+)%)')
-				elseif mysql_type == 'date'
-					 or mysql_type == 'datetime'
-					 or mysql_type == 'timestamp'
-				then
-					type = 'date'
-					has_time = type ~= 'date' or nil
-				elseif mysql_type == 'enum' then
-					type = 'enum'
-				elseif mysql_type == 'char' or mysql_type == 'binary' then
-					padded = true
-				end
-
-				local field = {
-					col = col,
-					col_index = row.ordinal_position,
-					type = type,
-					mysql_type = mysql_type,
-					enum_values = parse_enum(row.column_type),
-					auto_increment = auto_increment,
-					not_null = row.is_nullable == 'NO' or nil,
-					min = min,
-					max = max,
-					digits = digits,
-					decimals = decimals,
-					unsigned = unsigned,
-					has_time = has_time,
-					padded = padded,
-					size = size or row.character_octet_length,
-					mysql_charset = row.character_set_name,
-					mysql_collation = row.collation_name,
-					mysql_charsize = row.character_maximum_length,
-				}
+				local field = field_type_attrs(row)
+				field.col = col
+				field.col_index = row.ordinal_position
+				field.auto_increment = auto_increment
+				field.not_null = row.is_nullable == 'NO' or nil
 				fields[i] = field
 				fields[col] = field
 
@@ -285,13 +291,15 @@ function sqlpp.package.mysql(spp)
 		local function row_col(row) return row.col end
 		local function row_ref_col(row) return row.ref_col end
 
-		for i, sch_tbl, indices in spp.each_group('sch_tbl', self:assert(self:rawquery(fmt([[
+		local sql_sch = sch and self:sqlval(sch)
+		local sql_tbl = tbl and self:sqlval(tbl)
+
+		for i, sch_tbl, constraints in spp.each_group('sch_tbl', self:assert(self:rawquery([[
 			select
-				concat(s.table_schema, '.', s.table_name) sch_tbl,
-				s.table_name,
-				s.column_name col,
-				s.index_name,
-				s.collation, /* D|A */
+				concat(cs.table_schema, '.', cs.table_name) sch_tbl,
+				cs.table_name,
+				kcu.column_name col,
+				cs.constraint_name,
 				cs.constraint_type,
 				kcu.referenced_table_schema ref_sch,
 				kcu.referenced_table_name ref_tbl,
@@ -299,33 +307,26 @@ function sqlpp.package.mysql(spp)
 				coalesce(rc.update_rule, 'no action') as onupdate,
 				coalesce(rc.delete_rule, 'no action') as ondelete
 			from
-				information_schema.statistics s /* columns for pk, uk, fk, ix */
-				left join information_schema.table_constraints cs /* cs type: pk, fk, uk */
-					 on cs.table_schema      = s.table_schema
-					and cs.table_name        = s.table_name
-					and cs.constraint_name   = s.index_name
+				information_schema.table_constraints cs /* cs type: pk, fk, uk */
 				left join information_schema.key_column_usage kcu /* fk ref_tbl & ref_cols */
-					 on kcu.table_schema     = s.table_schema
-					and kcu.table_name       = s.table_name
-					and kcu.column_name      = s.column_name
+					 on kcu.table_schema     = cs.table_schema
+					and kcu.table_name       = cs.table_name
 					and kcu.constraint_name  = cs.constraint_name
 				left join information_schema.referential_constraints rc /* fk rules: innodb only */
 					 on rc.constraint_schema = kcu.table_schema
 					and rc.table_name        = kcu.table_name
 					and rc.constraint_name   = kcu.constraint_name
 			where
-				s.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-				and ]]..(catargs(' and ', '1 = 1',
-						sch and 's.table_schema = %s',
-						tbl and 's.table_name = %s') or '')..[[
+				cs.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
+				and ]]..(catargs(' and ',
+						sch and 'cs.table_schema = '..sql_sch,
+						tbl and 'cs.table_name   = '..sql_tbl) or '1 = 1')..[[
 			order by
-				s.table_schema, s.table_name
-			]], sch and self:sqlval(sch), tbl and self:sqlval(tbl)))))
+				cs.table_schema, cs.table_name
+			]])))
 		do
-
 			local tbl = tables[sch_tbl]
-
-			for i, ix_name, grp in spp.each_group('index_name', indices) do
+			for i, cs_name, grp in spp.each_group('constraint_name', constraints) do
 				local cs_type = grp[1].constraint_type
 				if cs_type == 'PRIMARY KEY' then
 					tbl.pk = imap(grp, row_col)
@@ -337,7 +338,7 @@ function sqlpp.package.mysql(spp)
 						field.ref_table = ref_tbl
 						field.ref_col = grp[1].ref_col
 					end
-					attr(tbl, 'fks')[ix_name] = {
+					attr(tbl, 'fks')[cs_name] = {
 						ref_table = ref_tbl,
 						cols      = imap(grp, row_col),
 						ref_cols  = imap(grp, row_ref_col),
@@ -345,20 +346,142 @@ function sqlpp.package.mysql(spp)
 						ondelete  = repl(grp[1].ondelete:lower(), 'no action', nil),
 					}
 				elseif cs_type == 'UNIQUE' then
-					attr(tbl, 'uks')[ix_name] = {
+					attr(tbl, 'uks')[cs_name] = {
 						cols = imap(grp, row_col),
-					}
-				else --index
-					attr(tbl, 'ixs')[ix_name] = {
-						cols = imap(grp, row_col),
-						desc = grp[1].collation == 'D' or nil,
 					}
 				end
 			end
 
 		end
 
+		--NOTE: constraints do not create an index if one is already available
+		--on the columns that they need, so not every constraint has an entry
+		--in the statistics table (which is why we get indexes with another select).
+		if opt.all or opt.indexes then
+			for i, sch_tbl, indices in spp.each_group('sch_tbl', self:assert(self:rawquery([[
+				select
+					concat(s.table_schema, '.', s.table_name) sch_tbl,
+					s.table_name,
+					s.column_name col,
+					s.index_name,
+					s.collation /* D|A */
+				from information_schema.statistics s /* columns for pk, uk, fk, ix */
+				left join information_schema.table_constraints cs /* cs type: pk, fk, uk */
+					 on cs.table_schema     = s.table_schema
+					and cs.table_name       = s.table_name
+					and cs.constraint_name  = s.index_name
+				where
+					cs.constraint_name is null
+					and s.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
+					and ]]..(catargs(' and ',
+							sch and 's.table_schema = '..sql_sch,
+							tbl and 's.table_name   = '..sql_tbl) or '1 = 1')..[[
+				order by
+					s.table_schema, s.table_name
+				]])))
+			do
+				local tbl = tables[sch_tbl]
+				for i, ix_name, grp in spp.each_group('index_name', indices) do
+					attr(tbl, 'ixs')[ix_name] = {
+						cols = imap(grp, row_col),
+						desc = grp[1].collation == 'D' or nil,
+					}
+				end
+			end
+		end
+
+		if opt.all or opt.triggers then
+			for i, sch_tbl, triggers in spp.each_group('sch_tbl', self:assert(self:rawquery([[
+				select
+					concat(event_object_schema, '.', event_object_table) sch_tbl,
+					trigger_name,
+					action_order,
+					action_timing,      /* before|after */
+					event_manipulation, /* insert|update|delete */
+					action_statement
+				from information_schema.triggers
+				where
+					event_object_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
+					and definer = current_user
+					and ]]..(catargs(' and ',
+							sch and 'event_object_schema = '..sql_sch,
+							tbl and 'event_object_table  = '..sql_tbl) or '1 = 1')..[[
+				order by
+					event_object_schema, event_object_table
+				]])))
+			do
+				local tbl = tables[sch_tbl]
+				for i, row in ipairs(triggers) do
+					attr(tbl, 'triggers')[row.trigger_name] = {
+						pos = row.action_order,
+						at = row.action_timing:lower(),
+						op = row.event_manipulation:lower(),
+						mysql_code = row.action_statement,
+					}
+				end
+			end
+		end
+
 		return tables
+	end
+
+	local function make_param(t)
+		local p = field_type_attrs(t)
+		p.mode = t.parameter_mode:lower()
+		p.name = t.parameter_name
+		return p
+	end
+
+	--TODO: get functions too.
+
+	function cmd:get_procs(sch)
+		local procsets = {} --{sch->{proc->p}}
+		for i, sch, procs in spp.each_group('sch', self:assert(self:rawquery([[
+			select
+				r.routine_schema sch,
+				r.routine_name,
+				r.routine_definition,
+
+				p.parameter_mode, /* in|out */
+				p.parameter_name,
+
+				/* input for field_type_attrs(): */
+				p.data_type,
+				p.dtd_identifier column_type,
+				p.numeric_precision,
+				p.numeric_scale,
+				p.ordinal_position,
+				p.character_octet_length,
+				p.character_set_name,
+				p.collation_name,
+				p.character_maximum_length
+
+			from information_schema.routines r
+			left join information_schema.parameters p
+				on p.specific_name = r.routine_name
+			where
+				r.routine_type = 'PROCEDURE'
+				and r.routine_schema <> 'sys'
+				]]..(sch and ' and r.routine_schema = '..self:sqlval(sch) or '')..[[
+			order by
+				r.routine_schema
+			]])))
+		do
+			local procset = attr(procsets, sch)
+			for i, proc_name, grp in spp.each_group('routine_name', procs) do
+				local p = {
+					mysql_code        = grp[1].action_statement,
+					mysql_return_type = grp[1].data_type,
+					mysql_code        = grp[1].routine_definition,
+					args = imap(grp, make_param),
+				}
+				procset[proc_name] = p
+				for i, param in ipairs(grp) do
+					p[i] = self:sqltype(param)
+				end
+			end
+		end
+		return procsets
 	end
 
 	--DDL commands ------------------------------------------------------------
