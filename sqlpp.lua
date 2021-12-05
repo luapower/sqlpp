@@ -1,5 +1,5 @@
 
---SQL preprocessor, postprocessor and command API.
+--SQL preprocessor, postprocessor and generator API.
 --Written by Cosmin Apreutesei. Public Domain.
 
 if not ... then require'schema_test'; return end
@@ -24,9 +24,9 @@ local imap = glue.imap
 local pack = glue.pack
 local trim = glue.trim
 
-local M = {package = {}}
+local sqlpp = {package = {}}
 
-function M.new()
+function sqlpp.new()
 
 	local spp = {}
 	local cmd = {}
@@ -227,7 +227,7 @@ function M.new()
 
 	function spp.subst(def) --'name type'
 		local name, val = def:match'([%w_]+)%s+(.*)'
-		assertf(not defines[name], 'macro already defined: %s', name)
+		assertf(not defines[name], 'macro already defined: $%s', name)
 		defines[name] = val
 	end
 
@@ -442,14 +442,16 @@ function M.new()
 	end
 
 	function cmd:sqlcol(fld, tbl)
+		local DEFAULT   = self.engine..'_default'
+		local COLLATION = self.engine..'_collation'
 		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
 			catargs(' ',
 				fld.unsigned and 'unsigned' or nil,
-				fld[COLLATION] and fld[COLLATION] ~= self.rawconn.collation
+				fld[COLLATION] and fld[COLLATION] ~= self.collation
 					and 'collate '..fld[COLLATION] or nil,
-				fld.not_null and 'not null' or nil,
-				tbl.ai_col == fld.col and 'auto_increment' or nil,
-				tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
+				fld.	not_null and 'not null' or nil,
+				fld.auto_increment and 'auto_increment' or nil,
+				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
 				fld[DEFAULT] and 'default '..self:sqlval(fld[DEFAULT])
 					or (fld.default and 'default '..self:sqlval(fld.default)) or nil,
 				fld.comment and 'comment '..self:sqlval(fld.comment) or nil
@@ -464,12 +466,13 @@ function M.new()
 		return _('constraint %-20s unique key (%s)', self:sqlname(name), cols(self, uk.cols))
 	end
 
-	function cmd:sqlindex(name, ix)
-		return _('index %-25s (%s)%s', self:sqlname(name),
+	function cmd:sqlix(name, ix)
+		return _('index %-20s (%s)%s', self:sqlname(name),
 			cols(self, ix.cols), ix.desc and ' desc' or '')
 	end
 
 	function cmd:sqlfk(name, fk)
+		assertf(fk.ref_cols, 'fk not resolved: %s', name)
 		local ondelete = fk.ondelete or 'no action'
 		local onupdate = fk.onupdate or 'cascade'
 		local a1 = ondelete ~= 'no action' and ' on delete '..ondelete or ''
@@ -479,24 +482,27 @@ function M.new()
 			cols(self, fk.ref_cols), a1, a2)
 	end
 
-	function cmd:sqltrigger(tbl, name, trg)
-		local CODE = self.engine..'_code'
+	function cmd:sqltrigger(tbl_name, name, trg)
+		local BODY = self.engine..'_body'
 		return _('trigger %s %s %s on %s for each row\n%s',
-			self:sqlname(name), trg.at, trg.op, self:sqlname(tbl.name), trg[CODE])
+			self:sqlname(name), trg.when, trg.op, self:sqlname(tbl_name), trg[BODY])
 	end
 
 	function cmd:sqlproc(name, proc)
-		local CODE = self.engine..'_code'
+		local BODY = self.engine..'_body'
 		local args = {}; for i,arg in ipairs(proc.args) do
 			args[i] = _('%s %s %s', arg.mode, arg.name, self:sqltype(arg))
 		end
-		return _('procedure %s (\n\t%s\n)\n%s', name, cat(args, ',\n\t'), proc[CODE])
+		return _('procedure %s (\n\t%s\n)\n%s', name, cat(args, ',\n\t'), proc[BODY])
 	end
 
-	function cmd:sql_create_table(t)
+	function cmd:sqlcheck(name, ck)
+		local BODY = self.engine..'_body'
+		return _('constraint %-20s check (%s)', self:sqlname(name), ck[BODY])
+	end
+
+	function cmd:sqltable(t)
 		local dt = {}
-		local DEFAULT = self.engine..'_default'
-		local COLLATION = self.engine..'_collation'
 		for i,fld in ipairs(t.fields) do
 			dt[i] = self:sqlcol(fld, t)
 		end
@@ -510,7 +516,7 @@ function M.new()
 		end
 		if t.ixs then
 			for name, ix in sortedpairs(t.ixs) do
-				add(dt, self:sqlindex(name, ix))
+				add(dt, self:sqlix(name, ix))
 			end
 		end
 		if t.fks then
@@ -518,75 +524,155 @@ function M.new()
 				add(dt, self:sqlfk(name, fk))
 			end
 		end
-		return _('create table %s (\n\t%s\n)', self:sqlname(t.name), cat(dt, ',\n\t'))
-	end
-
-	function cmd:sql_create_triggers(tbl)
-		local dt = {}
-		if tbl.triggers then
-			local function cmp_trg(a, b)
-				if a.op ~= b.op then return a.op < b.op end
-				if a.at ~= b.at then return a.at < b.at end
-				return a.pos < b.pos
-			end
-			for name, trg in sortedpairs(tbl.triggers, cmd_trg) do
-				add(dt, 'create '..self:sqltrigger(tbl, name, trg))
+		if t.checks then
+			for name, ck in sortedpairs(t.checks) do
+				add(dt, self:sqlcheck(name, ck))
 			end
 		end
-		return cat(dt, ';\n')
+		return _('(\n\t%s\n)', cat(dt, ',\n\t'))
+	end
+
+	function cmd:sqldb(t)
+		local CHARSET = self.engine..'_charset'
+		local COLLATE = self.engine..'_collation'
+		return _('database %s%s%s', self:sqlname(t.name),
+			t[CHARSET] and t[CHARSET] ~= self.charset
+				and ' character set'..t[CHARSET] or '',
+			t[COLLATE] and t[COLLATE] ~= self.collation
+				and ' collate '..t[COLLATE] or '')
 	end
 
 	function cmd:sqldiff(diff)
 		local dt = {}
-		if diff.tables then
-			for i,cmd in ipairs(diff.tables) do
-				local op, tbl, t = unpack(cmd, 1, 3)
-				if op == 'add' then
-					add(dt, self:sql_create_table(t))
-					add(dt, self:sql_create_triggers(t))
-				elseif op == 'remove' then
-					add(dt, _('drop table %s', self:sqlname(tbl)))
-				elseif op == 'update' then
-					if t.fields then
-						for i,cmd in ipairs(t.fields) do
-							local op, col, fld = unpack(cmd, 1, 3)
-							if op == 'add' then
-								add(dt, _('alter table %s add column %s',
-									self:sqlname(tbl),
-									self:sqlcol(fld)
-									--
-								))
-							elseif op == 'remove' then
-								add(dt, _('alter table %s drop column %s',
-									self:sqlname(tbl),
-									self:sqlname(fld.col)
-								))
-							elseif op == 'update' then
-								add(dt, _('alter table %s modify column %s',
-									self:sqlname(tbl),
-									self:sqlcol(fld)
-								))
-							end
-						end
-					end
-					if t.pk then
-						add(dt, _('alter table %s drop primary key, add %s',
-							self:sqlpk(t.pk)
-						))
+		local function P(...) add(dt, _(...)) end
+		local function N(s) return self:sqlname(s) end
+		if diff.procs and diff.procs.remove then
+			for proc_name in pairs(diff.procs.remove) do
+				P('drop %-16s %s', 'procedure', N(proc_name))
+			end
+		end
+		if diff.tables and diff.tables.update then
+			for tbl_name, d in pairs(diff.tables.update) do
+				if d.fks and d.fks.remove then
+					for fk_name in pairs(d.fks.remove) do
+						P('alter table %-16s drop %-16s %s', N(tbl_name), 'foreign key', N(fk_name))
 					end
 				end
 			end
 		end
-		if diff.procs then
-			for i,cmd in ipairs(diff.procs) do
-				local op, proc, t = unpack(cmd, 1, 3)
-				if op == 'add' then
-					add(dt, 'create '..self:sqlproc(proc, t))
-				elseif op == 'remove' then
-					add(dt, _('drop procedure %s', self:sqlname(proc)))
-				elseif op == 'update' then
-					pp(proc)
+		if diff.tables and diff.tables.remove then
+			for tbl_name in pairs(diff.tables.remove) do
+				P('drop table %s', N(tbl_name))
+			end
+		end
+		if diff.tables and diff.tables.add then
+			for tbl_name, tbl in pairs(diff.tables.add) do
+				P('create table %-16s %s', N(tbl_name), self:sqltable(tbl))
+				if tbl.triggers then
+					local function cmp_trg(a, b)
+						if a.op ~= b.op then return a.op < b.op end
+						if a.when ~= b.when then return a.when < b.when end
+						return a.pos < b.pos
+					end
+					for trg_name, trg in sortedpairs(tbl.triggers, cmd_trg) do
+						add(dt, 'create '..self:sqltrigger(tbl_name, trg_name, trg))
+					end
 				end
+			end
+		end
+		if diff.tables and diff.tables.update then
+			for tbl_name, d in pairs(diff.tables.update) do
+				if d.fields and d.fields.remove then
+					for col in pairs(d.fields.remove) do
+						P('alter table %-16s drop %-16s %s', N(tbl_name), 'column', N(col))
+					end
+				end
+				if d.fields and d.fields.add then
+					for col, fld in pairs(d.fields.add) do
+						P('alter table %-16s add %s', N(tbl_name), self:sqlcol(fld))
+						--TODO: after...
+					end
+				end
+				if d.fields and d.fields.update then
+					for col, d in pairs(d.fields.update) do
+						P('alter table %-16s change %-16s %s',
+							N(tbl_name),
+							N(col),
+							self:sqlcol(d.new)
+						)
+					end
+				end
+				if d.remove_pk then
+					P('alter table %-16s drop primary key', N(tbl_name))
+				end
+				if d.add_pk then
+					P('alter table %-16s add %s', N(tbl_name), self:sqlpk(d.add_pk))
+				end
+				if d.uks and d.uks.remove then
+					for uk_name in pairs(d.uks.remove) do
+						P('alter table %-16s drop %-16s %s', N(tbl_name), 'key', N(uk_name))
+					end
+				end
+				if d.uks and d.uks.add then
+					for uk_name, uk in pairs(d.uks.add) do
+						P('alter table %-16s add %s', N(tbl_name), self:sqluk(uk_name, uk))
+					end
+				end
+				if d.ixs and d.ixs.remove then
+					for ix_name in pairs(d.ixs.remove) do
+						P('alter table %-16s drop %-16s %s', N(tbl_name), 'index', N(ix_name))
+					end
+				end
+				if d.ixs and d.ixs.add then
+					for ix_name, ix in pairs(d.ixs.add) do
+						P('alter table %-16s add %s', N(tbl_name), self:sqlix(ix_name, ix))
+					end
+				end
+				if d.checks and d.checks.remove then
+					for ck_name in pairs(d.checks.remove) do
+						P('alter table %-16s drop %-16s %s', N(tbl_name), 'check', N(ck_name))
+					end
+				end
+				if d.checks and d.checks.add then
+					for ck_name, ck in pairs(d.checks.add) do
+						P('alter table %-16s add %s', N(tbl_name), self:sqlcheck(ck_name, ck))
+					end
+				end
+				if d.triggers and d.triggers.remove then
+					for trg_name in pairs(d.triggers.remove) do
+						P('drop trigger %-16s', N(trg_name))
+					end
+				end
+				if d.triggers and d.triggers.add then
+					for trg_name, trg in pairs(d.triggers.add) do
+						P('create '..self:sqltrigger(tbl_name, trg_name, trg))
+					end
+				end
+			end
+		end
+		if diff.tables and diff.tables.update then
+			for tbl_name, d in pairs(diff.tables.update) do
+				if d.fks and d.fks.add then
+					for fk_name, fk in pairs(d.fks.add) do
+						P('alter table %s add %s',
+							N(tbl_name), self:sqlfk(fk_name, fk))
+					end
+				end
+			end
+		end
+		if diff.tables and diff.tables.add then
+			for tbl_name, tbl in pairs(diff.tables.add) do
+				if tbl.fks then
+					for fk_name, fk in pairs(tbl.fks) do
+						P('alter table %s add %s',
+							N(tbl_name), self:sqlfk(fk_name, fk))
+					end
+				end
+			end
+		end
+		if diff.procs and diff.procs.add then
+			for proc_name, proc in pairs(diff.procs.add) do
+				add(dt, 'create '..self:sqlproc(proc_name, proc))
 			end
 		end
 		return dt
@@ -749,7 +835,7 @@ function M.new()
 	function spp.import(pkg)
 		for pkg in pkg:gmatch'[^%s]+' do
 			if not spp.loaded[pkg] then
-				assertf(M.package[pkg], 'no sqlpp module: %s', pkg)(spp)
+				assertf(sqlpp.package[pkg], 'no sqlpp module: %s', pkg)(spp)
 				spp.loaded[pkg] = true
 			end
 		end
@@ -791,6 +877,10 @@ function M.new()
 	function init(self, rawconn)
 		self.rawconn = rawconn
 		self.server_cache_key = rawconn.host..':'..rawconn.port
+		self.host      = rawconn.host
+		self.port      = rawconn.port
+		self.charset   = rawconn.charset
+		self.collation = rawconn.collation
 		return self
 	end
 
@@ -803,9 +893,9 @@ function M.new()
 		self:assert(self.rawconn:close())
 	end
 
-	function cmd:use(schema)
-		self:assert(self.rawconn:use(schema))
-		self.schema = self.rawconn.schema
+	function cmd:use(db)
+		self:assert(self.rawconn:use(db))
+		self.db = self.rawconn.db
 		return self
 	end
 
@@ -820,8 +910,8 @@ function M.new()
 		end
 		local fa = opt.field_attrs
 		for i,f in ipairs(fields) do
-			if opt.get_table_defs and f.table and f.schema then
-				local tdef = self:table_def(f.schema..'.'..f.table)
+			if opt.get_table_defs and f.table and f.db then
+				local tdef = self:table_def(f.db..'.'..f.table)
 				update(f, tdef.fields[f.col])
 			end
 			update(f, fa and fa[f.name])
@@ -987,8 +1077,8 @@ function M.new()
 		return attr(self:server_cache(), 'schema')
 	end
 
-	spp.table_attrs = {} --{sch.tbl->attrs}
-	spp.col_attrs = {} --{sch.tbl.col->attrs}
+	spp.table_attrs = {} --{db.tbl->attrs}
+	spp.col_attrs = {} --{db.tbl.col->attrs}
 	spp.mysql_col_type_attrs = {} --{col_type->attrs}
 	spp.col_type_attrs = {} --{col_type->attrs}
 	spp.col_name_attrs = {} --{col_name->attrs}
@@ -1000,56 +1090,56 @@ function M.new()
 	local function strip_ticks(s)
 		return s:gsub('^`', ''):gsub('`$', '')
 	end
-	function cmd:table_defs(sch_tbl, opt) --nil | TBL | SCH.TBL | TBL | SCH.* | *
-		local sch, tbl
-		if sch_tbl then --[SCH.]TBL
-			sch, tbl = sch_tbl:match'^(.-)%.(.*)$'
-			if not sch then --TBL
-				sch, tbl = assert(self.schema), sch_tbl
+	function cmd:table_defs(db_tbl, opt) --nil | TBL | DB.TBL | TBL | DB.* | *
+		local db, tbl
+		if db_tbl then --[DB.]TBL
+			db, tbl = db_tbl:match'^(.-)%.(.*)$'
+			if not db then --TBL
+				db, tbl = assert(self.db), db_tbl
 			end
 			if tbl == '*' then --all tables
 				tbl = nil
 			end
 		end
 		local cache = self:schema_cache()
-		if sch and tbl then --single table, check the cache.
-			sch = strip_ticks(sch)
+		if db and tbl then --single table, check the cache.
+			db  = strip_ticks(db)
 			tbl = strip_ticks(tbl)
-			sch_tbl = sch..'.'..tbl
-			local def = cache[sch_tbl]
+			db_tbl = db..'.'..tbl
+			local def = cache[db_tbl]
 			if def then
-				return {[sch_tbl] = def}
+				return {[db_tbl] = def}
 			end
 		end
-		local defs = self:get_table_defs(sch, tbl, opt)
-		for sch_tbl, def in pairs(defs) do
-			update(def, spp.table_attrs[sch_tbl])
+		local defs = self:get_table_defs(db, tbl, opt)
+		for db_tbl, def in pairs(defs) do
+			update(def, spp.table_attrs[db_tbl])
 			for _,field in ipairs(def.fields) do
 				local col = field.col
-				local col_attrs = spp.col_attrs[sch_tbl..'.'..col]
+				local col_attrs = spp.col_attrs[db_tbl..'.'..col]
 				update(field, col_attrs) --can change field's type.
 				update(field, spp.col_name_attrs[col]) --can change field's type.
 				update(field, spp.col_type_attrs[field.type])
 				update(field, spp.mysql_col_type_attrs[field.mysql_type])
 			end
-			cache[sch_tbl] = def
+			cache[db_tbl] = def
 		end
 		return defs
 	end
 
-	function cmd:table_def(sch_tbl, opt)
-		for k,def in pairs(self:table_defs(sch_tbl, opt)) do
+	function cmd:table_def(db_tbl, opt)
+		for k,def in pairs(self:table_defs(db_tbl, opt)) do
 			return def
 		end
 	end
 
-	function cmd:extract_schema(sch)
+	function cmd:extract_schema(db)
 		local schema = require'schema'
-		local sc = schema.new()
-		for sch_tbl, tbl in pairs(self:table_defs(sch..'.*', {all=1})) do
+		local sc = schema.new{engine = self.engine}
+		for db_tbl, tbl in pairs(self:table_defs(db..'.*', {all=1})) do
 			sc.tables[tbl.name] = tbl
 		end
-		sc.procs = self:get_procs(sch)[sch]
+		sc.procs = self:get_procs(db)[db]
 		return sc
 	end
 
@@ -1113,7 +1203,7 @@ function M.new()
 
 	--databases
 
-	function cmd:create_schema(name, charset, collation)
+	function cmd:create_db(name, charset, collation)
 		return self:query(outdent[[
 			create database if not exists ::name
 				#if charset
@@ -1124,8 +1214,8 @@ function M.new()
 				#endif
 			]], {
 				name = name,
-				charset = repl(charset, nil, spp.default_charset),
-				collation = repl(collation, nil, spp.default_collation),
+				charset = repl(charset, nil, self.rawconn.charset),
+				collation = repl(collation, nil, self.rawconn.collation),
 			})
 	end
 
@@ -1298,7 +1388,6 @@ function M.new()
 	function cmd:insert_or_update_row(tbl, vals, col_map)
 		local col_map = col_map_arg(col_map)
 		local tdef = self:table_def(tbl)
-		assert(not tdef.ai_col) --misuse
 		local set_sql = set_sql(self, vals, col_map, tdef.fields)
 		local sql = fmt(outdent[[
 				insert into %s set
@@ -1373,4 +1462,4 @@ function M.new()
 	return spp
 end
 
-return M
+return sqlpp

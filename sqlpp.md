@@ -1,7 +1,16 @@
 
 ## `local sqlpp = require'sqlpp'`
 
-Preprocessor features:
+SQLpp is an SQL preprocessor, result-set processor and SQL generator.
+Written as a generic wrapper over your favorite SQL connector library,
+its purpose is to give SQL more power, unlike ORMs which take away even
+the one it has. So definitely not for OOP-heads. If you like SQL though,
+sqlpp will help you make dynamic queries, generate update queries for you
+from structored data, extract database schema into a structured format
+and even generate DDL SQL from [schema] diffs so you can automate your
+migrations.
+
+### Preprocessor features
 
  * `#if #elif #else #endif` conditionals
  * `$foo` text substitutions
@@ -12,16 +21,19 @@ Preprocessor features:
  * symbol substitutions (for encoding `null` and `default`)
  * removing double-dash comments (for [mysql_client])
 
+### Limitations
+
+Only supports MySQL via [mysql_client] for now. Writing a backend for your
+favorite RDBMS is easy though. At the minimum you have to show sqlpp how to
+connect to your engine and how to quote strings, and if you want schema diffs
+you have to write the queries to extract metadata from information tables.
+
 ## API Summary
 ----------------------------------------------- ------------------------------
 `sqlpp.new() -> spp`                            create a preprocessor instance
 `spp.connect(options) -> cmd`                   connect to a database
 `spp.use(rawconn) -> cmd`                       use an existing connection
-__Preprocessing__
-`cmd:sqlquery(sql, ...) -> sql, names`          preprocess a query
-`cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query leaving `?` placeholders
-`cmd:sqlparams(sql, [t]) -> sql, names`         substitute named params
-`cmd:sqlargs(sql, ...) -> sql`                  substitute positional args
+__SQL formatting__
 `cmd:sqlname(s) -> s`                           format name: `'foo.bar'` -> `'`foo`.`bar`'`
 `cmd:esc(s) -> s`                               escape a string to be used inside SQL string literals
 `cmd:sqlval(v[, field]) -> s`                   format any value
@@ -29,8 +41,13 @@ __Preprocessing__
 `spp.tsv_rows(opt, s) -> rows`                  convert a tab-separated list to a list of rows
 `cmd:sqltsv(opt, s) -> s`                       format a tab-separated list
 `cmd:sqldiff(o, opt)`                           format a [schema] diff object
+__SQL preprocessing__
+`cmd:sqlquery(sql, ...) -> sql, names`          preprocess a query
+`cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query leaving `?` placeholders
+`cmd:sqlparams(sql, [t]) -> sql, names`         substitute named params
+`cmd:sqlargs(sql, ...) -> sql`                  substitute positional args
 __Query execution__
-`cmd:query([opt], sql, ...) -> rows`            query
+`cmd:query([opt], sql, ...) -> rows`            query with preprocessing
 `cmd:first_row([opt], sql, ...) -> rows`        query and return the first row
 `cmd:each_row([opt], sql, ...) -> iter`         query and iterate rows
 `cmd:each_row_vals([opt], sql, ...)-> iter`     query and iterate rows unpacked
@@ -47,7 +64,7 @@ __Grouping result rowsets__
 `spp.groups(col, rows|groups) -> groups`        group rows
 `spp.each_group(col, rows|groups) -> iter`      group rows and iterate groups
 __DDL commands__
-`cmd:table_def(['[SCHEMA.]TABLE|*']) -> t`      get table definition (cached)
+`cmd:table_def(['[DB.]TABLE|*']) -> t`          get table definition (cached)
 `cmd:create_database(name)`                     create database
 `cmd:drop_table(name)`                          drop table
 `cmd:drop_tables('T1 T2 ...')`                  drop multiple tables
@@ -76,8 +93,8 @@ __Module system__
 `spp.import(module)`                            import sqlpp module
 __Modules__
 `require'sqlpp_mysql'`                          load the code for the MySQL module
-`spp.require'mysql'`                            load the MySQL module
-`spp.require'mysql_domains'`                    load common type domains for MySQL
+`spp.import'mysql'`                             load the MySQL module
+`spp.import'mysql_domains'`                     load common type domains for MySQL
 __Extending the preprocessor__
 `spp.keyword.KEYWORD -> symbol`                 get a symbol for a keyword
 `spp.keywords[SYMBOL] = keyword`                set a keyword for a symbol
@@ -90,7 +107,7 @@ __Extending the preprocessor__
 ### `sqlpp.new() -> spp`
 
 Create a preprocessor instance. Modules can be loaded into the instance
-with `spp.require()`.
+with `spp.import()`.
 
 The preprocessor doesn't work all by itself, it needs a database-specific
 module to implement the particulars of your database engine. Currently only
@@ -122,7 +139,7 @@ Notes on value expansion:
   to `null` instead of empty string which would result in `in ()` which is
   invalid syntax in MySQL).
 
-  * never use dots in schema names, table names or column names,
+  * never use dots in database names, table names or column names,
   or `sqlname()` won't work (other SQL tools won't work either).
 
   * avoid using multi-line comments except for optimizer hints because
@@ -164,13 +181,13 @@ macros.
 Extend the preprocessor with a module, available to all preprocessor
 instances to be loaded with `spp.import()`.
 
-### `spp.require(name)`
+### `spp.import(name)`
 
 Load a module into the preprocessor instance.
 
 ## Modules
 
-### `require'sqlpp_mysql'` <br> `spp.require'mysql'`
+### `require'sqlpp_mysql'` <br> `spp.import'mysql'`
 
 MySQL module that extends a sqlpp instance with MySQL-specific quoting,
 DDL macros, DDL commands and MDL commands.
@@ -180,7 +197,7 @@ DDL macros, DDL commands and MDL commands.
 MySQL-specific quoting of values: `inf` and `nan` expand to `null`,
 booleans expand to `1` and `0`.
 
-### `spp.require'mysql_domains'`
+### `spp.import'mysql_domains'`
 
 MySQL module with common type domains. Provided separately as those are
 non-standard naming conventions.
