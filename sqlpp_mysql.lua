@@ -96,7 +96,7 @@ function sqlpp.package.mysql(spp)
 		bigint     = 19,
 	}
 
-	local default_sizes = {
+	local blob_sizes = {
 		tinytext   = 0x000000ff,
 		text       = 0x0000ffff,
 		mediumtext = 0x00ffffff,
@@ -131,13 +131,15 @@ function sqlpp.package.mysql(spp)
 		then
 			return mt
 		else
-			local sz = fld.char_size
-			if not sz and fld.size then --infer `char_size` from `size`.
-				 sz = fld.mysql_collation
-					and mysql.char_size(fld.size, fld.mysql_collation)
-					or fld.size
+			local sz = blob_sizes[mt] --those can't be limited.
+			if not sz then
+				sz = fld.maxlen
+				if not sz and fld.size then --infer `maxlen` from `size`.
+					 sz = fld.mysql_collation
+						and mysql.char_size(fld.size, fld.mysql_collation)
+						or fld.size
+				end
 			end
-			sz = sz ~= default_sizes[mt] and sz or nil
 			return sz and _('%s(%d)', mt, sz) or mt
 		end
 	end
@@ -168,6 +170,13 @@ function sqlpp.package.mysql(spp)
 			if dt.type == 'number' then
 				min, max = mysql.dec_range(dt.digits, dt.decimals, dt.unsigned)
 			end
+		elseif mt == 'tinyint' or mt == 'smallint' or mt == 'mediumint'
+			or mt == 'int' or mt == 'bigint'
+		then
+			dt.type = 'number'
+			dt.min, dt.max, dt.size = mysql.int_range(mt, dt.unsigned)
+			dt.display_width = tonumber(t.column_type:match'%((%d+)%)')
+			dt.decimals = 0
 		elseif mt == 'float' then
 			dt.type = 'number'
 			dt.size = 4
@@ -177,29 +186,34 @@ function sqlpp.package.mysql(spp)
 		elseif mt == 'year' then
 			dt.type = 'number'
 			dt.min, dt.max, dt.size = 1901, 2055, 2
-		elseif mt == 'tinyint' or mt == 'smallint' or mt == 'mediumint'
-			or mt == 'int' or mt == 'bigint'
-		then
-			dt.type = 'number'
-			dt.min, dt.max, dt.size = mysql.int_range(mt, dt.unsigned)
-			dt.display_width = tonumber(t.column_type:match'%((%d+)%)')
-			dt.decimals = 0
 		elseif mt == 'date' or mt == 'datetime' or mt == 'timestamp' then
 			dt.type = 'date'
 			dt.has_time = type ~= 'date' or nil
 		elseif mt == 'enum' then
-			dt.type = mt
+			dt.type = 'enum'
 			dt.enum_values = parse_values(t.column_type)
 		elseif mt == 'set' then
-			dt.type = mt
+			dt.type = 'set'
 			dt.set_values = parse_values(t.column_type)
-		elseif mt == 'char' or mt == 'binary' then
-			dt.padded = true
+		elseif mt == 'varchar' or mt == 'char'
+			or mt == 'tinytext' or mt == 'text'
+			or mt == 'mediumtext' or mt == 'longtext'
+		then
+			dt.type = 'text'
+			dt.padded = mt == 'char' or nil
+			dt.size = t.character_octet_length
+			dt.maxlen = t.character_maximum_length
+			dt.mysql_charset = t.character_set_name
+			dt.mysql_collation = t.collation_name
+		elseif mt == 'varbinary' or mt == 'binary'
+			or mt == 'tinyblob' or mt == 'blob'
+			or mt == 'mediumblob' or mt == 'longblob'
+		then
+			dt.type = 'blob'
+			dt.size = t.character_octet_length
+			dt.maxlen = t.character_maximum_length
+			dt.padded = mt == 'binary' or nil
 		end
-		dt.size = dt.size or t.character_octet_length
-		dt.char_size = t.character_maximum_length
-		dt.mysql_charset = t.character_set_name
-		dt.mysql_collation = t.collation_name
 		return dt
 	end
 
@@ -253,11 +267,11 @@ function sqlpp.package.mysql(spp)
 				fields[col] = field
 
 				local default = row.column_default
-				field.mysql_default = default
 				if field.type == 'date' and default == 'CURRENT_TIMESTAMP' then
-					default = nil --don't want the client to see this.
+					default = 'current_timestamp'
 				end
-				field.default = default
+				field.mysql_default = default
+				field.default = repl(default, 'current_timestamp', nil)
 			end
 
 			tables[db_tbl] = {
@@ -363,10 +377,9 @@ function sqlpp.package.mysql(spp)
 			do
 				local tbl = tables[db_tbl]
 				for i, ix_name, grp in spp.each_group('index_name', indices) do
-					attr(tbl, 'ixs')[ix_name] = {
-						cols = imap(grp, row_col),
-						desc = grp[1].collation == 'D' or nil,
-					}
+					local ix = imap(grp, row_col)
+					ix.desc = grp[1].collation == 'D' or nil
+					attr(tbl, 'ixs')[ix_name] = ix
 				end
 			end
 		end
