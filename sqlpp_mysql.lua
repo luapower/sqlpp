@@ -89,25 +89,10 @@ function sqlpp.package.mysql(spp)
 
 	--DDL SQL -----------------------------------------------------------------
 
-	--NOTE: this is the same for both signed and unsigned.
-	local default_display_widths = {
-		tinyint    =  3,
-		smallint   =  5,
-		mediumint  =  7,
-		int        = 10,
-		bigint     = 19,
-	}
-
 	function cmd:sqltype(fld)
 		local mt = fld.mysql_type
 		if mt == 'decimal' then
 			return _('decimal(%d,%d)', fld.digits, fld.decimals)
-		elseif mt == 'tinyint' or mt == 'smallint' or mt == 'mediumint'
-			or mt == 'int' or mt == 'bigint'
-		then
-			local dw = fld.display_width
-			dw = dw ~= default_display_widths[mt] and dw or nil
-			return dw and _('%s(%d)', mt, dw) or mt
 		elseif mt == 'enum' or mt == 'set' then
 			local function sqlval(s) return self:sqlval(s) end
 			local vals = fld.enum_values or fld.set_values
@@ -151,7 +136,6 @@ function sqlpp.package.mysql(spp)
 
 	local num_field_attrs = update({}, field_attrs)
 	num_field_attrs.size = nil
-	num_field_attrs.display_width = 1
 
 	spp.schema_options = {
 		supports_fks = true,
@@ -193,7 +177,6 @@ function sqlpp.package.mysql(spp)
 		then
 			dt.type = 'number'
 			dt.min, dt.max, dt.size = mysql.int_range(mt, dt.unsigned)
-			dt.display_width = tonumber(t.column_type:match'%((%d+)%)')
 			dt.decimals = 0
 		elseif mt == 'float' then
 			dt.type = 'number'
