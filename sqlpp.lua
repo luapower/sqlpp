@@ -452,8 +452,7 @@ function sqlpp.new()
 				fld.	not_null and 'not null' or nil,
 				fld.auto_increment and 'auto_increment' or nil,
 				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
-				fld[DEFAULT] and 'default '..self:sqlval(fld[DEFAULT])
-					or (fld.default and 'default '..self:sqlval(fld.default)) or nil,
+				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]) or nil,
 				fld.comment and 'comment '..self:sqlval(fld.comment) or nil
 			) or '')
 	end

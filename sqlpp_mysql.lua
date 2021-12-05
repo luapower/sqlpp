@@ -266,12 +266,12 @@ function sqlpp.package.mysql(spp)
 				fields[i] = field
 				fields[col] = field
 
-				local default = row.column_default
-				if field.type == 'date' and default == 'CURRENT_TIMESTAMP' then
-					default = 'current_timestamp'
+				field.mysql_default = row.column_default
+				field.default = row.column_default
+				if field.type == 'date' and field.mysql_default == 'CURRENT_TIMESTAMP' then
+					field.mysql_default = 'current_timestamp'
+					field.default = nil
 				end
-				field.mysql_default = default
-				field.default = repl(default, 'current_timestamp', nil)
 			end
 
 			tables[db_tbl] = {
