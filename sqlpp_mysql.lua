@@ -96,17 +96,6 @@ function sqlpp.package.mysql(spp)
 		bigint     = 19,
 	}
 
-	local blob_sizes = {
-		tinytext   = 0x000000ff,
-		text       = 0x0000ffff,
-		mediumtext = 0x00ffffff,
-		longtext   = 0xffffffff,
-		tinyblob   = 0x000000ff,
-		blob       = 0x0000ffff,
-		mediumblob = 0x00ffffff,
-		longblob   = 0xffffffff,
-	}
-
 	function cmd:sqltype(fld)
 		local mt = fld.mysql_type
 		if mt == 'decimal' then
@@ -121,26 +110,13 @@ function sqlpp.package.mysql(spp)
 			local function sqlval(s) return self:sqlval(s) end
 			local vals = fld.enum_values or fld.set_values
 			return _('%s(%s)', mt, cat(imap(vals, sqlval), ', '))
-		elseif
-			   mt == 'float'
-			or mt == 'double'
-			or mt == 'year'
-			or mt == 'date'
-			or mt == 'datetime'
-			or mt == 'timestamp'
-		then
-			return mt
+		elseif mt == 'varchar' then
+			local maxlen = fld.maxlen or mysql.char_size(fld.size, fld.mysql_collation)
+			return _('%s(%d)', mt, maxlen)
+		elseif mt == 'varbinary' then
+			return _('%s(%d)', mt, fld.size)
 		else
-			local sz = blob_sizes[mt] --those can't be limited.
-			if not sz then
-				sz = fld.maxlen
-				if not sz and fld.size then --infer `maxlen` from `size`.
-					 sz = fld.mysql_collation
-						and mysql.char_size(fld.size, fld.mysql_collation)
-						or fld.size
-				end
-			end
-			return sz and _('%s(%d)', mt, sz) or mt
+			return mt
 		end
 	end
 
@@ -211,7 +187,6 @@ function sqlpp.package.mysql(spp)
 		then
 			dt.type = 'blob'
 			dt.size = t.character_octet_length
-			dt.maxlen = t.character_maximum_length
 			dt.padded = mt == 'binary' or nil
 		end
 		return dt

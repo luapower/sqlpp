@@ -449,7 +449,7 @@ function sqlpp.new()
 				fld.unsigned and 'unsigned' or nil,
 				fld[COLLATION] and fld[COLLATION] ~= self.collation
 					and 'collate '..fld[COLLATION] or nil,
-				fld.	not_null and 'not null' or nil,
+				fld.not_null and 'not null' or nil,
 				fld.auto_increment and 'auto_increment' or nil,
 				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
 				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]) or nil,
