@@ -542,6 +542,8 @@ function sqlpp.new()
 	end
 
 	function cmd:sqldiff(diff)
+		assertf(diff.engine == self.engine,
+			'diff engine is `%s`, expected `%s`', diff.engine, self.engine)
 		local dt = {}
 		local function P(...) add(dt, _(...)) end
 		local function N(s) return self:sqlname(s) end
@@ -1134,7 +1136,7 @@ function sqlpp.new()
 
 	function cmd:extract_schema(db)
 		local schema = require'schema'
-		local sc = schema.new{engine = self.engine}
+		local sc = schema.new(update({engine = self.engine}, spp.schema_options))
 		for db_tbl, tbl in pairs(self:table_defs(db..'.*', {all=1})) do
 			sc.tables[tbl.name] = tbl
 		end

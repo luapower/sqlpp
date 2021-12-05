@@ -21,12 +21,13 @@ migrations.
  * symbol substitutions (for encoding `null` and `default`)
  * removing double-dash comments (for [mysql_client])
 
-### Limitations
+### Backends & writing your own
 
 Only supports MySQL via [mysql_client] for now. Writing a backend for your
 favorite RDBMS is easy though. At the minimum you have to show sqlpp how to
 connect to your engine and how to quote strings, and if you want schema diffs
 you have to write the queries to extract metadata from information tables.
+Use `sqlpp_mysql.lua` as a reference when writing your backend.
 
 ## API Summary
 ----------------------------------------------- ------------------------------

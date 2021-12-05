@@ -20,6 +20,7 @@ local catargs = glue.catargs
 local attr = glue.attr
 local imap = glue.imap
 local index = glue.index
+local update = glue.update
 
 function sqlpp.package.mysql(spp)
 
@@ -88,6 +89,7 @@ function sqlpp.package.mysql(spp)
 
 	--DDL SQL -----------------------------------------------------------------
 
+	--NOTE: this is the same for both signed and unsigned.
 	local default_display_widths = {
 		tinyint    =  3,
 		smallint   =  5,
@@ -121,6 +123,46 @@ function sqlpp.package.mysql(spp)
 	end
 
 	--schema extraction -------------------------------------------------------
+
+	local function diff_keys(t1, t2, keys)
+		local dt = {}
+		for k, diff in pairs(keys) do
+			if t1[k] ~= t2[k] then
+				dt[k] = true
+			end
+		end
+		return next(dt) and {old = t2, new = t1, changed = dt}
+	end
+
+	local field_attrs = {
+		digits=1,
+		decimals=1,
+		size=1, --not relevant for numbers, mysql_type is enough.
+		maxlen=1,
+		unsigned=1,
+		not_null=1,
+		auto_increment=1,
+		comment=1,
+		mysql_type=1,
+		mysql_charset=1,
+		mysql_collation=1,
+		mysql_default=1,
+	}
+
+	local num_field_attrs = update({}, field_attrs)
+	num_field_attrs.size = nil
+	num_field_attrs.display_width = 1
+
+	spp.schema_options = {
+		supports_fks = true,
+		supports_checks = true,
+		supports_triggers = true,
+		supports_procs = true,
+		compare_fields = function(fld1, fld2)
+			local keys = fld2.type == 'number' and num_field_attrs or field_attrs
+			return diff_keys(fld1, fld2, keys)
+		end,
+	}
 
 	local function parse_values(s)
 		local vals = s:match'%((.-)%)$'
