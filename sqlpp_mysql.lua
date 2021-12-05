@@ -109,16 +109,6 @@ function sqlpp.package.mysql(spp)
 
 	--schema extraction -------------------------------------------------------
 
-	local function diff_keys(t1, t2, keys)
-		local dt = {}
-		for k, diff in pairs(keys) do
-			if t1[k] ~= t2[k] then
-				dt[k] = true
-			end
-		end
-		return next(dt) and {old = t2, new = t1, changed = dt}
-	end
-
 	local field_attrs = {
 		digits=1,
 		decimals=1,
@@ -142,9 +132,8 @@ function sqlpp.package.mysql(spp)
 		supports_checks = true,
 		supports_triggers = true,
 		supports_procs = true,
-		compare_fields = function(fld1, fld2)
-			local keys = fld2.type == 'number' and num_field_attrs or field_attrs
-			return diff_keys(fld1, fld2, keys)
+		relevant_field_attrs = function(fld1, fld2)
+			return fld2.type == 'number' and num_field_attrs or field_attrs
 		end,
 	}
 
