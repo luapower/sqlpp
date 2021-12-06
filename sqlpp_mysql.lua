@@ -150,7 +150,7 @@ function sqlpp.package.mysql(spp)
 	--input: data_type, column_type, numeric_precision, numeric_scale,
 	--  ordinal_position, character_octet_length, character_set_name,
 	--  collation_name, character_maximum_length.
-	local function field_type_attrs(t)
+	local function make_field(t)
 		local mt = t.data_type
 		local dt = {mysql_type = mt}
 		dt.unsigned = t.column_type:find' unsigned$' and true or nil
@@ -211,7 +211,10 @@ function sqlpp.package.mysql(spp)
 		opt = opt or empty
 		local tables = {} --{DB.TBL->table}
 
-		for i, db_tbl, grp in spp.each_group('db_tbl', self:assert(self:rawquery(fmt([[
+		local sql_db  = db  and self:sqlval(db)
+		local sql_tbl = tbl and self:sqlval(tbl)
+
+		for i, db_tbl, grp in spp.each_group('db_tbl', self:assert(self:rawquery([[
 			select
 				concat(table_schema, '.', table_name) db_tbl,
 				table_name,
@@ -232,49 +235,39 @@ function sqlpp.package.mysql(spp)
 			from
 				information_schema.columns
 			where
-				]]..(catargs(' and ', '1 = 1',
-						db  and 'table_schema = %s',
-						tbl and 'table_name = %s') or '')..[[
+				and ]]..(catargs(' and ',
+						db  and 'table_schema = '..sql_db,
+						tbl and 'table_name   = '..sql_tbl) or '1 = 1')..[[
 			order by
 				table_schema, table_name, ordinal_position
-			]], db and self:sqlval(db), tbl and self:sqlval(tbl)))))
+			]])))
 		do
-
-			local fields, pk = {}, {}
-
+			local fields = {}
 			for i, row in ipairs(grp) do
-
 				local col = row.column_name
 				local auto_increment = row.extra == 'auto_increment' or nil
-
-				local field = field_type_attrs(row)
+				local field = make_field(row)
 				field.col = col
 				field.col_index = row.ordinal_position
 				field.auto_increment = auto_increment
 				field.not_null = row.is_nullable == 'NO' or nil
-				fields[i] = field
-				fields[col] = field
-
 				field.mysql_default = row.column_default
 				field.default = row.column_default
 				if field.type == 'date' and field.mysql_default == 'CURRENT_TIMESTAMP' then
 					field.mysql_default = 'current_timestamp'
 					field.default = nil
 				end
+				fields[i] = field
+				fields[col] = field
 			end
-
 			tables[db_tbl] = {
 				db = db, name = grp[1].table_name, fields = fields,
-				pk = pk,
+				pk = {},
 			}
-
 		end
 
 		local function row_col(row) return row.col end
 		local function row_ref_col(row) return row.ref_col end
-
-		local sql_db  = db  and self:sqlval(db)
-		local sql_tbl = tbl and self:sqlval(tbl)
 
 		for i, db_tbl, constraints in spp.each_group('db_tbl', self:assert(self:rawquery([[
 			select
@@ -304,7 +297,7 @@ function sqlpp.package.mysql(spp)
 						db  and 'cs.table_schema = '..sql_db,
 						tbl and 'cs.table_name   = '..sql_tbl) or '1 = 1')..[[
 			order by
-				cs.table_schema, cs.table_name
+				cs.table_schema, cs.table_name, kcu.ordinal_position
 			]])))
 		do
 			local tbl = tables[db_tbl]
@@ -340,13 +333,18 @@ function sqlpp.package.mysql(spp)
 
 		--NOTE: constraints do not create an index if one is already available
 		--on the columns that they need, so not every constraint has an entry
-		--in the statistics table (which is why we get indexes with another select).
+		--in the statistics table (which is why we couldn't join `statistics`
+		--in and had to get indexes with a separate select).
+
+		local function row_desc(t) return t.collation == 'D' end
+
 		if opt.all or opt.indexes then
-			for i, db_tbl, indices in spp.each_group('db_tbl', self:assert(self:rawquery([[
+			for i, db_tbl, ixs in spp.each_group('db_tbl', self:assert(self:rawquery([[
 				select
 					concat(s.table_schema, '.', s.table_name) db_tbl,
 					s.table_name,
 					s.column_name col,
+					cs.constraint_name,
 					s.index_name,
 					s.collation /* D|A */
 				from information_schema.statistics s /* columns for pk, uk, fk, ix */
@@ -355,20 +353,33 @@ function sqlpp.package.mysql(spp)
 					and cs.table_name       = s.table_name
 					and cs.constraint_name  = s.index_name
 				where
-					cs.constraint_name is null
-					and s.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
+					s.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
 					and ]]..(catargs(' and ',
 							db  and 's.table_schema = '..sql_db,
 							tbl and 's.table_name   = '..sql_tbl) or '1 = 1')..[[
 				order by
-					s.table_schema, s.table_name
+					s.table_schema, s.table_name, s.seq_in_index
 				]])))
 			do
 				local tbl = tables[db_tbl]
-				for i, ix_name, grp in spp.each_group('index_name', indices) do
-					local ix = imap(grp, row_col)
-					ix.desc = grp[1].collation == 'D' or nil
-					attr(tbl, 'ixs')[ix_name] = ix
+				for i, ix_name, grp in spp.each_group('index_name', ixs) do
+					local desc = imap(grp, row_desc)
+					if ix_name == 'PRIMARY' then
+						tbl.pk.desc = desc
+					else
+						local cs_name = grp[1].constraint_name
+						if cs_name then --matching uk or fk
+							local uk = tbl.uks[cs_name]
+							local fk = tbl.fks[cs_name]
+							assert(not uk ~= not fk)
+							if uk then uk.desc = desc end
+							if fk then fk.cols.desc = desc end
+						else --ix
+							local ix = imap(grp, row_col)
+							ix.desc = desc
+							attr(tbl, 'ixs')[ix_name] = ix
+						end
+					end
 				end
 			end
 		end
@@ -437,7 +448,7 @@ function sqlpp.package.mysql(spp)
 	end
 
 	local function make_param(t)
-		local p = field_type_attrs(t)
+		local p = make_field(t)
 		p.mode = repl(t.parameter_mode:lower(), 'in', nil)
 		p.col  = t.parameter_name --it's weird, but easier bc fields have `col`.
 		return p

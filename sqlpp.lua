@@ -438,8 +438,12 @@ function sqlpp.new()
 
 	--schema diff formatting --------------------------------------------------
 
-	local function cols(self, t)
-		return cat(imap(t, function(s) return self:sqlname(s) end), ', ')
+	local function ix_cols(self, t)
+		local dt = {}
+		for i,s in ipairs(t) do
+			dt[i] = self:sqlname(s) .. (t.desc and t.desc[i] and ' desc' or '')
+		end
+		return cat(dt, ', ')
 	end
 
 	function cmd:sqlcol(fld, tbl)
@@ -459,16 +463,15 @@ function sqlpp.new()
 	end
 
 	function cmd:sqlpk(pk)
-		return _('primary key (%s)', cols(self, pk))
+		return _('primary key (%s)', ix_cols(self, pk))
 	end
 
 	function cmd:sqluk(name, uk)
-		return _('constraint %-20s unique key (%s)', self:sqlname(name), cols(self, uk.cols))
+		return _('constraint %-20s unique key (%s)', self:sqlname(name), ix_cols(self, uk))
 	end
 
 	function cmd:sqlix(name, ix)
-		return _('index %-20s (%s)%s', self:sqlname(name),
-			cols(self, ix.cols), ix.desc and ' desc' or '')
+		return _('index %-20s (%s)%s', self:sqlname(name), ix_cols(self, ix))
 	end
 
 	function cmd:sqlfk(name, fk)
@@ -478,8 +481,8 @@ function sqlpp.new()
 		local a1 = ondelete ~= 'no action' and ' on delete '..ondelete or ''
 		local a2 = onupdate ~= 'no action' and ' on update '..onupdate or ''
 		return _('constraint %-20s foreign key (%s) references %s (%s)%s%s',
-			self:sqlname(name), cols(self, fk.cols), self:sqlname(fk.ref_table),
-			cols(self, fk.ref_cols), a1, a2)
+			self:sqlname(name), ix_cols(self, fk.cols), self:sqlname(fk.ref_table),
+			ix_cols(self, fk.ref_cols), a1, a2)
 	end
 
 	function cmd:sqltrigger(tbl_name, name, trg)
