@@ -23,6 +23,7 @@ local outdent = glue.outdent
 local imap = glue.imap
 local pack = glue.pack
 local trim = glue.trim
+local sortedpairs = glue.sortedpairs
 
 local sqlpp = {package = {}}
 
@@ -490,7 +491,7 @@ function sqlpp.new()
 	function cmd:sqlproc(name, proc)
 		local BODY = self.engine..'_body'
 		local args = {}; for i,arg in ipairs(proc.args) do
-			args[i] = _('%s %s %s', arg.mode, arg.name, self:sqltype(arg))
+			args[i] = _('%s %s %s', arg.mode or 'in', arg.col, self:sqltype(arg))
 		end
 		return _('procedure %s (\n\t%s\n)\n%s', name, cat(args, ',\n\t'), proc[BODY])
 	end
@@ -548,26 +549,26 @@ function sqlpp.new()
 		local function P(...) add(dt, _(...)) end
 		local function N(s) return self:sqlname(s) end
 		if diff.procs and diff.procs.remove then
-			for proc_name in pairs(diff.procs.remove) do
+			for proc_name in sortedpairs(diff.procs.remove) do
 				P('drop %-16s %s', 'procedure', N(proc_name))
 			end
 		end
 		if diff.tables and diff.tables.update then
-			for tbl_name, d in pairs(diff.tables.update) do
+			for tbl_name, d in sortedpairs(diff.tables.update) do
 				if d.fks and d.fks.remove then
-					for fk_name in pairs(d.fks.remove) do
+					for fk_name in sortedpairs(d.fks.remove) do
 						P('alter table %-16s drop %-16s %s', N(tbl_name), 'foreign key', N(fk_name))
 					end
 				end
 			end
 		end
 		if diff.tables and diff.tables.remove then
-			for tbl_name in pairs(diff.tables.remove) do
+			for tbl_name in sortedpairs(diff.tables.remove) do
 				P('drop table %s', N(tbl_name))
 			end
 		end
 		if diff.tables and diff.tables.add then
-			for tbl_name, tbl in pairs(diff.tables.add) do
+			for tbl_name, tbl in sortedpairs(diff.tables.add) do
 				P('create table %-16s %s', N(tbl_name), self:sqltable(tbl))
 				local tgs = tbl.triggers
 				if tgs then
@@ -585,20 +586,20 @@ function sqlpp.new()
 			end
 		end
 		if diff.tables and diff.tables.update then
-			for tbl_name, d in pairs(diff.tables.update) do
+			for tbl_name, d in sortedpairs(diff.tables.update) do
 				if d.fields and d.fields.remove then
-					for col in pairs(d.fields.remove) do
+					for col in sortedpairs(d.fields.remove) do
 						P('alter table %-16s drop %-16s %s', N(tbl_name), 'column', N(col))
 					end
 				end
 				if d.fields and d.fields.add then
-					for col, fld in pairs(d.fields.add) do
+					for col, fld in sortedpairs(d.fields.add) do
 						P('alter table %-16s add %s', N(tbl_name), self:sqlcol(fld))
 						--TODO: after...
 					end
 				end
 				if d.fields and d.fields.update then
-					for col, d in pairs(d.fields.update) do
+					for col, d in sortedpairs(d.fields.update) do
 						P('alter table %-16s change %-16s %s',
 							N(tbl_name),
 							N(col),
@@ -613,51 +614,51 @@ function sqlpp.new()
 					P('alter table %-16s add %s', N(tbl_name), self:sqlpk(d.add_pk))
 				end
 				if d.uks and d.uks.remove then
-					for uk_name in pairs(d.uks.remove) do
+					for uk_name in sortedpairs(d.uks.remove) do
 						P('alter table %-16s drop %-16s %s', N(tbl_name), 'key', N(uk_name))
 					end
 				end
 				if d.uks and d.uks.add then
-					for uk_name, uk in pairs(d.uks.add) do
+					for uk_name, uk in sortedpairs(d.uks.add) do
 						P('alter table %-16s add %s', N(tbl_name), self:sqluk(uk_name, uk))
 					end
 				end
 				if d.ixs and d.ixs.remove then
-					for ix_name in pairs(d.ixs.remove) do
+					for ix_name in sortedpairs(d.ixs.remove) do
 						P('alter table %-16s drop %-16s %s', N(tbl_name), 'index', N(ix_name))
 					end
 				end
 				if d.ixs and d.ixs.add then
-					for ix_name, ix in pairs(d.ixs.add) do
+					for ix_name, ix in sortedpairs(d.ixs.add) do
 						P('alter table %-16s add %s', N(tbl_name), self:sqlix(ix_name, ix))
 					end
 				end
 				if d.checks and d.checks.remove then
-					for ck_name in pairs(d.checks.remove) do
+					for ck_name in sortedpairs(d.checks.remove) do
 						P('alter table %-16s drop %-16s %s', N(tbl_name), 'check', N(ck_name))
 					end
 				end
 				if d.checks and d.checks.add then
-					for ck_name, ck in pairs(d.checks.add) do
+					for ck_name, ck in sortedpairs(d.checks.add) do
 						P('alter table %-16s add %s', N(tbl_name), self:sqlcheck(ck_name, ck))
 					end
 				end
 				if d.triggers and d.triggers.remove then
-					for trg_name in pairs(d.triggers.remove) do
+					for trg_name in sortedpairs(d.triggers.remove) do
 						P('drop trigger %-16s', N(trg_name))
 					end
 				end
 				if d.triggers and d.triggers.add then
-					for trg_name, trg in pairs(d.triggers.add) do
-						P('create '..self:sqltrigger(tbl_name, trg_name, trg))
+					for tg_name, tg in sortedpairs(d.triggers.add) do
+						P('create '..self:sqltrigger(tbl_name, tg_name, tg))
 					end
 				end
 			end
 		end
 		if diff.tables and diff.tables.update then
-			for tbl_name, d in pairs(diff.tables.update) do
+			for tbl_name, d in sortedpairs(diff.tables.update) do
 				if d.fks and d.fks.add then
-					for fk_name, fk in pairs(d.fks.add) do
+					for fk_name, fk in sortedpairs(d.fks.add) do
 						P('alter table %s add %s',
 							N(tbl_name), self:sqlfk(fk_name, fk))
 					end
@@ -665,9 +666,9 @@ function sqlpp.new()
 			end
 		end
 		if diff.tables and diff.tables.add then
-			for tbl_name, tbl in pairs(diff.tables.add) do
+			for tbl_name, tbl in sortedpairs(diff.tables.add) do
 				if tbl.fks then
-					for fk_name, fk in pairs(tbl.fks) do
+					for fk_name, fk in sortedpairs(tbl.fks) do
 						P('alter table %s add %s',
 							N(tbl_name), self:sqlfk(fk_name, fk))
 					end
@@ -675,7 +676,7 @@ function sqlpp.new()
 			end
 		end
 		if diff.procs and diff.procs.add then
-			for proc_name, proc in pairs(diff.procs.add) do
+			for proc_name, proc in sortedpairs(diff.procs.add) do
 				add(dt, 'create '..self:sqlproc(proc_name, proc))
 			end
 		end
@@ -691,7 +692,7 @@ function sqlpp.new()
 		local as_cols = {} --{as_col1,...}
 		local as_col_map = {} --{as_col->col}
 		if opt.col_map then
-			for col, as_col in glue.sortedpairs(opt.col_map) do
+			for col, as_col in sortedpairs(opt.col_map) do
 				add(as_cols, as_col)
 				as_col_map[as_col] = col
 			end
