@@ -569,14 +569,17 @@ function sqlpp.new()
 		if diff.tables and diff.tables.add then
 			for tbl_name, tbl in pairs(diff.tables.add) do
 				P('create table %-16s %s', N(tbl_name), self:sqltable(tbl))
-				if tbl.triggers then
-					local function cmp_trg(a, b)
+				local tgs = tbl.triggers
+				if tgs then
+					local function cmp_tg(tg1, tg2)
+						local a = tgs[tg1]
+						local b = tgs[tg2]
 						if a.op ~= b.op then return a.op < b.op end
 						if a.when ~= b.when then return a.when < b.when end
 						return a.pos < b.pos
 					end
-					for trg_name, trg in sortedpairs(tbl.triggers, cmd_trg) do
-						add(dt, 'create '..self:sqltrigger(tbl_name, trg_name, trg))
+					for tg_name, tg in sortedpairs(tgs, cmp_tg) do
+						add(dt, 'create '..self:sqltrigger(tbl_name, tg_name, tg))
 					end
 				end
 			end
