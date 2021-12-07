@@ -419,7 +419,8 @@ function sqlpp.new()
 		return t
 	end
 
-	--TODO: this gives false positives (but no false negatives which is what we want).
+	--NOTE: this gives false positives as far as schema changes go,
+	--but no false negatives, which is what we care about.
 	function cmd:has_ddl(sql)
 		sql = trim(sql):lower()
 		return
