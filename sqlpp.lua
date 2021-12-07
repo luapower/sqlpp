@@ -1179,7 +1179,7 @@ function sqlpp.new()
 		local schema = require'schema'
 		local src_sc = schema.isschema(src) and src or src:extract_schema()
 		local this_sc = self:extract_schema()
-		local diff = this_sc:diff_to_new(src_sc)
+		local diff = schema.diff(this_sc, src_sc)
 		local sql = cat(this_sc:sqldiff(diff), '\n')
 		if opt.dry then
 			print(sql)
