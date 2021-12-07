@@ -29,7 +29,7 @@ sock.run(function()
 		user = 'root',
 		password = 'root',
 		db = 'sp',
-		collation = 'server',
+		charset = 'utf8mb4',
 	}
 
 	spp.table_attrs['sp.val'] = {text = 'attribute value'}

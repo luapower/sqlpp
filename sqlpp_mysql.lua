@@ -48,7 +48,8 @@ function sqlpp.package.mysql(spp)
 	end
 	function cmd:rawconnect(opt)
 		if opt and opt.fake then
-			return {fake = true, host = '', port = '', esc = mysql.esc_utf8, engine = 'mysql'}
+			return {fake = true, host = 'fake', port = 'fake',
+				esc = mysql.esc_utf8, engine = 'mysql'}
 		end
 		return pass(self, mysql.connect(opt))
 	end
@@ -64,7 +65,7 @@ function sqlpp.package.mysql(spp)
 		rawstmt:free()
 	end
 
-	--quoting -----------------------------------------------------------------
+	--SQL quoting -------------------------------------------------------------
 
 	local sqlnumber = cmd.sqlnumber
 	function cmd:sqlnumber(v)
@@ -87,7 +88,7 @@ function sqlpp.package.mysql(spp)
 		]], {compact = true})))
 	end
 
-	--DDL SQL -----------------------------------------------------------------
+	--SQL formatting ----------------------------------------------------------
 
 	function cmd:sqltype(fld)
 		local mt = fld.mysql_type
@@ -107,35 +108,30 @@ function sqlpp.package.mysql(spp)
 		end
 	end
 
-	--schema extraction -------------------------------------------------------
-
-	local field_attrs = {
-		digits=1,
-		decimals=1,
-		size=1, --not relevant for numbers, mysql_type is enough.
-		maxlen=1,
-		unsigned=1,
-		not_null=1,
-		auto_increment=1,
-		comment=1,
-		mysql_type=1,
-		mysql_charset=1,
-		mysql_collation=1,
-		mysql_default=1,
-	}
-
-	local num_field_attrs = update({}, field_attrs)
-	num_field_attrs.size = nil
+	--schema diff'ing ---------------------------------------------------------
 
 	spp.schema_options = {
 		supports_fks = true,
 		supports_checks = true,
 		supports_triggers = true,
 		supports_procs = true,
-		relevant_field_attrs = function(fld1, fld2)
-			return fld2.type == 'number' and num_field_attrs or field_attrs
-		end,
+		relevant_field_attrs = {
+			digits=1,
+			decimals=1,
+			size=1,
+			maxlen=1,
+			unsigned=1,
+			not_null=1,
+			auto_increment=1,
+			comment=1,
+			mysql_type=1,
+			mysql_charset=1,
+			mysql_collation=1,
+			mysql_default=1,
+		},
 	}
+
+	--schema extraction -------------------------------------------------------
 
 	local function parse_values(s)
 		local vals = s:match'%((.-)%)$'
@@ -199,7 +195,7 @@ function sqlpp.package.mysql(spp)
 			or mt == 'tinyblob' or mt == 'blob'
 			or mt == 'mediumblob' or mt == 'longblob'
 		then
-			dt.type = 'blob'
+			dt.type = 'binary'
 			dt.size = t.character_octet_length
 			dt.padded = mt == 'binary' or nil
 		end
@@ -504,128 +500,6 @@ function sqlpp.package.mysql(spp)
 		return procsets
 	end
 
-	--DDL commands ------------------------------------------------------------
-
-	spp.default_charset = 'utf8mb4'
-	spp.default_collation = 'utf8mb4_unicode_ci'
-
-	--existence tests
-
-	function cmd:schema_exists(name)
-		return self:first_row([[
-			select 1 from information_schema.schemata
-			where schema_name = ?
-		]], name or self.db) ~= nil
-	end
-
-	function cmd:table_exists(name)
-		return self:first_row([[
-			select 1 from information_schema.tables
-			where table_schema = database() and table_name = ?
-		]], name)
-	end
-
-	function cmd:fk_exists(name)
-		return self:first_row([[
-			select 1 from information_schema.referential_constraints
-			where constraint_schema = database() and constraint_name = ?
-		]], name) ~= nil
-	end
-
-	function cmd:index_exists(name)
-		return self:first_row([[
-			select 1 from information_schema.statistics
-			where table_schema = database() and index_name = ?
-		]], name) ~= nil
-	end
-
-	function cmd:column_exists(tbl, name)
-		return self:first_row([[
-			select 1 from information_schema.columns
-			where table_schema = database() and table_name = ? and column_name = ?
-		]], tbl, name) ~= nil
-	end
-
-	--check constraints
-
-	function cmd:check_exists(tbl, name)
-		return self:first_row([[
-			sekect 1 from information_schema.check_constraints
-			where table_schema = database() and table_name = ? and constraint_name = ?
-		]], tbl, name) ~= nil
-	end
-
-	--triggers
-
-	function cmd:trigger_exists(name)
-		return self:first_row([[
-			select 1 from information_schema.triggers
-			where trigger_name = ?
-		]], name) ~= nil
-	end
-
-	local add_trigger_sql = outdent[[
-		create trigger ::name {where} on ::table for each row
-		begin
-		{code}
-		end]]
-
-	local function triggername(name, tbl, where)
-		local s = where:gsub('([^%s])[^%s]*%s*', '%1')
-		return fmt('%s_%s_%s', tbl, s, name)
-	end
-
-	function cmd:readd_trigger(name, tbl, where, code)
-		local name = triggername(name, tbl, where)
-		self:query('lock tables ?? write', tbl)
-		self:query('drop trigger if exists ??', name)
-		code = outdent(code, '\t')
-		self:query(add_trigger_sql, {name = name, table = tbl, where = where, code = code})
-		self:query('unlock tables')
-	end
-
-	function cmd:add_trigger(name, tbl, where, code)
-		local name = triggername(name, tbl, where)
-		if self:trigger_exists( name) then return end
-		code = outdent(code, '\t')
-		return self:query(add_trigger_sql, {name = name, table = tbl, where = where, code = code})
-	end
-
-	function cmd:drop_trigger(name, tbl, where)
-		local name = triggername(name, tbl, where)
-		return self:query('drop trigger if exists ??', name)
-	end
-
-	--procs
-
-	function cmd:proc_exists(name)
-		return self:first_row([[
-			select 1 from information_schema.routines
-			where routine_schema = database() and routine_name = ?
-		]], name) ~= nil
-	end
-
-	function cmd:add_proc(name, args, code)
-		if self:proc_exists(name) then return end
-		code = outdent(code, '\t')
-		return self:query(fmt(outdent[[
-			create procedure ::name (%s) sql security invoker
-			begin
-			%s
-			end
-		]], args or '', outdent(code)), {name = name})
-	end
-
-	function cmd:drop_proc(name)
-		return self:query('drop procedure if exists ??', name)
-	end
-
-	function cmd:readd_proc(name, ...)
-		if self:drop_proc(name) then
-			self:add_proc(name, ...)
-		end
-	end
-
 	--column locks feature ----------------------------------------------------
 
 	local function column_locks_code(cols)
@@ -651,7 +525,7 @@ function sqlpp.package.mysql(spp)
 		return self:drop_trigger('col_locks', tbl, 'before update')
 	end
 
-	--error message parsing ---------------------------------------------------
+	--structured errors -------------------------------------------------------
 
 	spp.errno[1364] = function(self, err)
 		err.col = err.message:match"'(.-)'"

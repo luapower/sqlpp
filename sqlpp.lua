@@ -27,9 +27,11 @@ local sortedpairs = glue.sortedpairs
 
 local sqlpp = {package = {}}
 
+function sqlpp.ispp(v) return type(v) == 'table' and v.is_sqlpp or false end
+
 function sqlpp.new()
 
-	local spp = {}
+	local spp = {is_sqlpp = true}
 	local cmd = {}
 	spp.command = cmd
 
@@ -421,7 +423,7 @@ function sqlpp.new()
 
 	--NOTE: this gives false positives as far as schema changes go,
 	--but no false negatives, which is what we care about.
-	function cmd:has_ddl(sql)
+	function cmd:sql_has_ddl(sql)
 		sql = trim(sql):lower()
 		return
 		      sql:find'^create%s'
@@ -453,8 +455,7 @@ function sqlpp.new()
 		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
 			catargs(' ',
 				fld.unsigned and 'unsigned' or nil,
-				fld[COLLATION] and fld[COLLATION] ~= self.collation
-					and 'collate '..fld[COLLATION] or nil,
+				fld[COLLATION] and 'collate '..fld[COLLATION] or nil,
 				fld.not_null and 'not null' or nil,
 				fld.auto_increment and 'auto_increment' or nil,
 				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
@@ -534,16 +535,6 @@ function sqlpp.new()
 			end
 		end
 		return _('(\n\t%s\n)', cat(dt, ',\n\t'))
-	end
-
-	function cmd:sqldb(t)
-		local CHARSET = self.engine..'_charset'
-		local COLLATE = self.engine..'_collation'
-		return _('database %s%s%s', self:sqlname(t.name),
-			t[CHARSET] and t[CHARSET] ~= self.charset
-				and ' character set'..t[CHARSET] or '',
-			t[COLLATE] and t[COLLATE] ~= self.collation
-				and ' collate '..t[COLLATE] or '')
 	end
 
 	function cmd:sqldiff(diff)
@@ -952,7 +943,7 @@ function sqlpp.new()
 
 		if type(opt) ~= 'table' then --sql, ...
 			return self:query(empty, opt, sql, ...)
-		elseif type(sql) == 'table' then --opt1, opt2, sql, ...
+		elseif type(sql) == 'table' then --opt1, ..., sql, ...
 			return self:query(update(opt, sql), ...)
 		end
 
@@ -961,7 +952,7 @@ function sqlpp.new()
 			sql, param_names = self:sqlquery(sql, ...)
 		end
 
-		if self:has_ddl(sql) then
+		if self:sql_has_ddl(sql) then
 			self:schema_changed()
 		end
 		return get_result_sets(self, nil, opt, param_names,
@@ -1060,7 +1051,15 @@ function sqlpp.new()
 		return pass(glue.pcall(f, ...))
 	end
 
-	--schema cache ------------------------------------------------------------
+	--schema reflection -------------------------------------------------------
+
+	function cmd:dbs()
+		return self:exec_with_options({to_array=1}, 'show databases')
+	end
+
+	function cmd:tables(sch)
+		return self:exec_with_options({to_array=1}, 'show tables from ??', sch or self.db)
+	end
 
 	local server_caches = {}
 
@@ -1091,10 +1090,6 @@ function sqlpp.new()
 	spp.mysql_col_type_attrs = {} --{col_type->attrs}
 	spp.col_type_attrs = {} --{col_type->attrs}
 	spp.col_name_attrs = {} --{col_name->attrs}
-
-	function cmd:tables()
-		return self:exec_with_options({to_array=1}, 'show tables')
-	end
 
 	local function strip_ticks(s)
 		return s:gsub('^`', ''):gsub('`$', '')
@@ -1142,9 +1137,14 @@ function sqlpp.new()
 		end
 	end
 
-	function cmd:extract_schema(db)
+	function cmd:empty_schema()
 		local schema = require'schema'
-		local sc = schema.new(update({engine = self.engine}, spp.schema_options))
+		return schema.new(update({engine = self.engine}, spp.schema_options))
+	end
+
+	function cmd:extract_schema(db)
+		db = db or self.db
+		local sc = self:empty_schema()
 		for db_tbl, tbl in pairs(self:table_defs(db..'.*', {all=1})) do
 			sc.tables[tbl.name] = tbl
 		end
@@ -1152,65 +1152,7 @@ function sqlpp.new()
 		return sc
 	end
 
-	--DDL macros --------------------------------------------------------------
-
-	spp.subst'table  create table if not exists'
-
-	local function cols(s, newsep)
-		return s:gsub('%s+', newsep or ',')
-	end
-
-	local function dename(s)
-		return s:gsub('`', '')
-	end
-
-	local function deixcol(s)
-		return s
-			:gsub(' asc$', ''):gsub(' desc$', '')
-			:gsub(' asc ', ''):gsub(' desc ', '')
-	end
-
-	local function indexname(type, tbl, col)
-		return fmt('%s_%s__%s', type, dename(tbl), dename(cols(col, '_')))
-	end
-	local function fkname(tbl, col) return indexname('fk', tbl, col) end
-	local function ukname(tbl, col) return indexname('uk', tbl, col) end
-	local function ixname(tbl, col) return indexname('ix', tbl, deixcol(col)) end
-
-	function spp.macro.fk(self, tbl, col, ftbl, fcol, ondelete, onupdate)
-		ondelete = ondelete or 'no action'
-		onupdate = onupdate or 'cascade'
-		local a1 = ondelete ~= 'no action' and ' on delete '..ondelete or ''
-		local a2 = onupdate ~= 'no action' and ' on update '..onupdate or ''
-		return fmt('constraint %s foreign key (%s) references %s (%s)%s%s',
-			fkname(tbl, col), cols(col), ftbl or col, cols(fcol or ftbl or col), a1, a2)
-	end
-
-	function spp.macro.child_fk(self, tbl, col, ftbl, fcol)
-		return spp.macro.fk(self, tbl, col, ftbl, fcol, 'cascade')
-	end
-
-	function spp.macro.uk(self, tbl, col)
-		return fmt('constraint %s unique key (%s)', ukname(tbl, col), cols(col))
-	end
-
-	local function ixcols(s)
-		return cols(s)
-			:gsub(',asc$', ' asc'):gsub(',desc$', ' desc')
-			:gsub(',asc,', ' asc,'):gsub(',desc,', ' desc,')
-	end
-	function spp.macro.ix(self, tbl, col)
-		return fmt('index %s (%s)', ixname(tbl, col), ixcols(col))
-	end
-
-	function spp.macro.enum(self, ...)
-		return fmt('enum (%s) character set ascii',
-			cat(imap(pack(...), function(s) return self:sqlstring(s) end), ', '))
-	end
-
 	--DDL commands ------------------------------------------------------------
-
-	--databases
 
 	function cmd:create_db(name, charset, collation)
 		return self:query(outdent[[
@@ -1222,13 +1164,23 @@ function sqlpp.new()
 				collate {collation}
 				#endif
 			]], {
-				name = name,
-				charset = repl(charset, nil, self.rawconn.charset),
-				collation = repl(collation, nil, self.rawconn.collation),
+				name      = name,
+				charset   = charset,
+				collation = collation,
 			})
 	end
 
-	--tables
+	function cmd:drop_db(name)
+		return self:query('drop database if exists ??', name)
+	end
+
+	function cmd:sync_schema(src)
+		local schema = require'schema'
+		local src_sc = schema.isschema(src) and src or src:extract_schema()
+		local this_sc = self:extract_schema()
+		local diff = this_sc:diff_to_new(src_sc)
+		return self:query(cat(this_sc:sqldiff(diff), '\n'))
+	end
 
 	function cmd:drop_table(name)
 		return self:query('drop table if exists ??', name)
@@ -1241,8 +1193,6 @@ function sqlpp.new()
 		end
 		return dt
 	end
-
-	--columns
 
 	function cmd:add_column(tbl, name, type_pos)
 		if self:column_exists(tbl, name) then return end
@@ -1259,8 +1209,6 @@ function sqlpp.new()
 		return self:query('alter table ?? drop column ??', tbl, name)
 	end
 
-	--check constraints
-
 	function cmd:add_check(tbl, name, expr)
 		if self:check_exists(tbl, name) then return end
 		return self:query(fmt('alter table ?? add constraint ?? check(%s)', expr), tbl, name)
@@ -1276,8 +1224,6 @@ function sqlpp.new()
 			self:add_check(tbl, name, expr)
 		end
 	end
-
-	--forein keys, indices, unique keys
 
 	function cmd:add_fk(tbl, col, ftbl, ...)
 		if self:fk_exists(fkname(tbl, col)) then return end

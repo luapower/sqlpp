@@ -23,28 +23,29 @@ migrations.
 
 ### Backends & writing your own
 
-Only supports MySQL via [mysql_client] for now. Writing a backend for your
-favorite RDBMS is easy though. At the minimum you have to show sqlpp how to
-connect to your engine and how to quote strings, and if you want schema diffs
-you have to write the queries to extract metadata from information tables.
-Use `sqlpp_mysql.lua` as a reference when writing your backend.
+SQLpp currently only supports MySQL via [mysql_client]. Writing a backend
+for your favorite RDBMS is easy though. At the minimum you have to show
+sqlpp how to connect to your engine and how to quote strings, and if you
+want schema diffs you have to write the queries to extract metadata from
+information tables. Use `sqlpp_mysql.lua` as a reference for how to do all that.
 
 ## API Summary
 ----------------------------------------------- ------------------------------
 `sqlpp.new() -> spp`                            create a preprocessor instance
 `spp.connect(options) -> cmd`                   connect to a database
 `spp.use(rawconn) -> cmd`                       use an existing connection
+`spp.host`, `spp.port`, `spp.db`                connection info
 __SQL formatting__
 `cmd:sqlname(s) -> s`                           format name: `'foo.bar'` -> `'`foo`.`bar`'`
 `cmd:esc(s) -> s`                               escape a string to be used inside SQL string literals
-`cmd:sqlval(v[, field]) -> s`                   format any value
+`cmd:sqlval(v[, field]) -> s`                   format a Lua value as an SQL literal
 `cmd:sqlrows(rows[, indent]) -> s`              format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
-`spp.tsv_rows(opt, s) -> rows`                  convert a tab-separated list to a list of rows
-`cmd:sqltsv(opt, s) -> s`                       format a tab-separated list
+`spp.tsv_rows(opt, s) -> rows`                  parse a tab-separated list into a list of rows
+`cmd:sqltsv(opt, s) -> s`                       parse a tab-separated list and format with `sqlrows()`
 `cmd:sqldiff(o, opt)`                           format a [schema] diff object
 __SQL preprocessing__
 `cmd:sqlquery(sql, ...) -> sql, names`          preprocess a query
-`cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query leaving `?` placeholders
+`cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query but leave `?` placeholders
 `cmd:sqlparams(sql, [t]) -> sql, names`         substitute named params
 `cmd:sqlargs(sql, ...) -> sql`                  substitute positional args
 __Query execution__
@@ -64,12 +65,20 @@ __Query execution__
 __Grouping result rowsets__
 `spp.groups(col, rows|groups) -> groups`        group rows
 `spp.each_group(col, rows|groups) -> iter`      group rows and iterate groups
-__DDL commands__
+__Schema refleciton__
+`cmd:dbs()` -> {db1,...}`                       list databases
+`cmd:tables([db]) -> {tbl1,...}`                list tables in (current) db
 `cmd:table_def(['[DB.]TABLE|*']) -> t`          get table definition (cached)
-`cmd:create_database(name)`                     create database
+`cmd:extract_schema([db]) -> sc`                extract db [schema] (cached)
+`cmd:empty_schema() -> sc`                      create an empty [schema]
+`cmd:clear_schema_cache()`                      clear schema cache
+__DDL commands__
+`cmd:create_db(name, [charset], [collation])`   create database
+`cmd:drop_db(name)`                             drop database
+`cmd:sync_schema(source_schema)`                sync schema with a source schema
 `cmd:drop_table(name)`                          drop table
-`cmd:drop_tables('T1 T2 ...')`                  drop multiple tables
-`cmd:add_column(tbl, name, type, pos)`          add column
+`cmd:drop_tables('T1 ...')`                     drop tables
+`cmd:add_column(tbl, name, type_pos)`           add column
 `cmd:rename_column(tbl, oldname, newname)`      rename column
 `cmd:drop_column(tbl, col)`                     drop column
 `cmd:[re]add_fk(tbl, col, ...)`                 (re)create foreign key
