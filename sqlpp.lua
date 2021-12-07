@@ -1174,12 +1174,18 @@ function sqlpp.new()
 		return self:query('drop database if exists ??', name)
 	end
 
-	function cmd:sync_schema(src)
+	function cmd:sync_schema(src, opt)
+		opt = opt or empty
 		local schema = require'schema'
 		local src_sc = schema.isschema(src) and src or src:extract_schema()
 		local this_sc = self:extract_schema()
 		local diff = this_sc:diff_to_new(src_sc)
-		return self:query(cat(this_sc:sqldiff(diff), '\n'))
+		local sql = cat(this_sc:sqldiff(diff), '\n')
+		if opt.dry then
+			print(sql)
+		else
+			return self:query(sql)
+		end
 	end
 
 	function cmd:drop_table(name)
