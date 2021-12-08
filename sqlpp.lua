@@ -421,24 +421,6 @@ function sqlpp.new()
 		return t
 	end
 
-	--NOTE: this gives false positives as far as schema changes go,
-	--but no false negatives, which is what we care about.
-	function cmd:sql_has_ddl(sql)
-		sql = trim(sql):lower()
-		return
-		      sql:find'^create%s'
-			or sql:find'^alter%s'
-			or sql:find'^drop%s'
-			or sql:find'^grant%s'
-			or sql:find'^revoke%s'
-			or sql:find';%s*create%s'
-			or sql:find';%s*alter%s'
-			or sql:find';%s*drop%s'
-			or sql:find';%s*grant%s'
-			or sql:find';%s*revoke%s'
-			and true or false
-	end
-
 	--schema diff formatting --------------------------------------------------
 
 	local function ix_cols(self, t)
@@ -452,6 +434,7 @@ function sqlpp.new()
 	function cmd:sqlcol(fld, tbl)
 		local DEFAULT   = spp.engine..'_default'
 		local COLLATION = spp.engine..'_collation'
+		local ON_UPDATE = spp.engine..'_on_update'
 		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
 			catargs(' ',
 				fld.unsigned and 'unsigned' or nil,
@@ -459,7 +442,8 @@ function sqlpp.new()
 				fld.not_null and 'not null' or nil,
 				fld.auto_increment and 'auto_increment' or nil,
 				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
-				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]) or nil,
+				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]),
+				fld[ON_UPDATE] ~= nil and 'on update '..fld[ON_UPDATE],
 				fld.comment and 'comment '..self:sqlval(fld.comment) or nil
 			) or '')
 	end
@@ -881,6 +865,7 @@ function sqlpp.new()
 		self.port      = rawconn.port
 		self.charset   = rawconn.charset
 		self.collation = rawconn.collation
+		self.schemas = attr(self:server_cache(), 'schemas')
 		return self
 	end
 
@@ -905,16 +890,15 @@ function sqlpp.new()
 	end
 
 	local function query_opt(self, opt)
-		if opt.get_table_defs then
+		if next(self.schemas) then
 			local field_attrs = opt.field_attrs
 			local function update_field_attrs(rawconn, fields, opt)
 				if type(field_attrs) == 'function' then
 					field_attrs = field_attrs(rawconn, fields, opt)
 				end
 				for i,f in ipairs(fields) do
-					if f.table and f.db then
-						local tdef = self:table_def(f.db..'.'..f.table)
-						update(f, tdef.fields[f.col])
+					if f.table and f.db and self.schemas[f.db] then
+						update(f, self.schemas[f.db].tables[f.table].fields[f.col])
 					end
 					if field_attrs then
 						update(f, field_attrs[f.name])
@@ -952,15 +936,11 @@ function sqlpp.new()
 		elseif type(sql) == 'table' then --opt1, opt2, ...
 			return self:query(update(opt, sql), ...)
 		end
-		opt = query_opt(opt)
+		opt = query_opt(self, opt)
 
 		local param_names
 		if opt.parse ~= false then
 			sql, param_names = self:sqlquery(sql, ...)
-		end
-
-		if self:sql_has_ddl(sql) then
-			self:schema_changed()
 		end
 
 		return get_result_sets(self, nil, opt, param_names,
@@ -1012,7 +992,7 @@ function sqlpp.new()
 		elseif type(sql) == 'table' then --opt1, opt2, ...
 			return self:prepare(update(opt, sql), ...)
 		end
-		opt = query_opt(opt)
+		opt = query_opt(self, opt)
 
 		local param_names, param_map
 		if opt.parse ~= false then
@@ -1086,55 +1066,20 @@ function sqlpp.new()
 		return rt[s]
 	end
 
-	function cmd:schema_changed()
-		self:server_cache().schema = {}
-	end
-
-	function cmd:schema_cache()
-		return attr(self:server_cache(), 'schema')
-	end
-
 	local function strip_ticks(s)
 		return s:gsub('^`', ''):gsub('`$', '')
 	end
-	function cmd:table_defs(db_tbl, opt) --nil | TBL | DB.TBL | TBL | DB.* | *
-		local db, tbl
-		if db_tbl then --[DB.]TBL
-			db, tbl = db_tbl:match'^(.-)%.(.*)$'
-			if not db then --TBL
-				db, tbl = assert(self.db), db_tbl
-			end
-			if tbl == '*' then --all tables
-				tbl = nil
-			end
-		end
-		local cache = self:schema_cache()
-		if db and tbl then --single table, check the cache.
-			db  = strip_ticks(db)
-			tbl = strip_ticks(tbl)
-			if self.schemas then
-				local schema = self.schemas[db]
-				if schema then
-					return schema.tables[tbl]
-				end
-			end
-			db_tbl = db..'.'..tbl
-			local def = cache[db_tbl]
-			if def then
-				return {[db_tbl] = def}
-			end
-		end
-		local defs = self:get_table_defs(db, tbl, opt)
-		for db_tbl, def in pairs(defs) do
-			cache[db_tbl] = def
-		end
-		return defs
-	end
-
 	function cmd:table_def(db_tbl, opt)
-		for k,def in pairs(self:table_defs(db_tbl, opt)) do
-			return def
+		local db, tbl = db_tbl:match'^(.-)%.(.*)$'
+		if not db then
+			db, tbl = assert(self.db), db_tbl
 		end
+		db  = strip_ticks(db)
+		tbl = strip_ticks(tbl)
+		db_tbl = db..'.'..tbl
+		local schemas = self.schemas
+		local schema = schemas and schemas[db]
+		return schema and schema.tables[tbl]
 	end
 
 	function spp.empty_schema()
@@ -1149,7 +1094,7 @@ function sqlpp.new()
 	function cmd:extract_schema(db)
 		db = db or self.db
 		local sc = self:empty_schema()
-		for db_tbl, tbl in pairs(self:table_defs(db..'.*', {all=1})) do
+		for db_tbl, tbl in pairs(self:get_table_defs(db, nil, {all=1})) do
 			sc.tables[tbl.name] = tbl
 		end
 		sc.procs = self:get_procs(db)[db]

@@ -2,7 +2,7 @@
 --MySQL preprocessor, postprocessor and command API.
 --Written by Cosmin Apreutesei. Public Domain.
 
-if not ... then require'schema_test'; return end
+if not ... then require'sqlpp_mysql_test'; return end
 
 local sqlpp = require'sqlpp'
 local glue = require'glue'
@@ -21,6 +21,7 @@ local attr = glue.attr
 local imap = glue.imap
 local index = glue.index
 local update = glue.update
+local empty = glue.empty
 
 function sqlpp.package.mysql(spp)
 
@@ -128,6 +129,7 @@ function sqlpp.package.mysql(spp)
 			mysql_charset=1,
 			mysql_collation=1,
 			mysql_default=1,
+			mysql_on_update=1,
 		},
 	}
 
@@ -231,6 +233,7 @@ function sqlpp.package.mysql(spp)
 			from
 				information_schema.columns
 			where
+				table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
 				and ]]..(catargs(' and ',
 						db  and 'table_schema = '..sql_db,
 						tbl and 'table_name   = '..sql_tbl) or '1 = 1')..[[
@@ -248,11 +251,13 @@ function sqlpp.package.mysql(spp)
 				field.auto_increment = auto_increment
 				field.not_null = row.is_nullable == 'NO' or nil
 				field.mysql_default = row.column_default
-				field.default = row.column_default
+				field.default = row.column_default --not used in DDL, sent to client.
 				if field.type == 'date' and field.mysql_default == 'CURRENT_TIMESTAMP' then
 					field.mysql_default = 'current_timestamp'
 					field.default = nil
 				end
+				field.mysql_on_update = row.extra
+					and row.extra:lower():match'^on update (.*)'
 				fields[i] = field
 				fields[col] = field
 			end
@@ -358,6 +363,8 @@ function sqlpp.package.mysql(spp)
 				]])))
 			do
 				local tbl = tables[db_tbl]
+				local uks = tbl.uks
+				local fks = tbl.fks
 				for i, ix_name, grp in spp.each_group('index_name', ixs) do
 					local desc = imap(grp, row_desc)
 					if ix_name == 'PRIMARY' then
@@ -365,8 +372,8 @@ function sqlpp.package.mysql(spp)
 					else
 						local cs_name = grp[1].constraint_name
 						if cs_name then --matching uk or fk
-							local uk = tbl.uks[cs_name]
-							local fk = tbl.fks[cs_name]
+							local uk = uks and uks[cs_name]
+							local fk = fks and fks[cs_name]
 							assert(not uk ~= not fk)
 							if uk then uk.desc = desc end
 							if fk then fk.cols.desc = desc end

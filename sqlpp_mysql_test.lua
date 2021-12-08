@@ -2,6 +2,7 @@
 local spp = require'sqlpp'.new()
 require'sqlpp_mysql'
 spp.import'mysql'
+require'$'
 
 if false then
 	pp(spp.query(outdent[[
@@ -32,10 +33,6 @@ sock.run(function()
 		charset = 'utf8mb4',
 	}
 
-	spp.table_attrs['sp.val'] = {text = 'attribute value'}
-	spp.table_attrs['sp.attr'] = {text = 'attribute'}
-	spp.table_attrs['sp.combi_val'] = {text = 'attribute value combination'}
-
 	if false then
 		pp(cmd:table_def'usr')
 	end
@@ -64,8 +61,72 @@ sock.run(function()
 		)
 	end
 
+	if false then
+		pp(cmd:table_defs()['sp.currency'])
+	end
+
 	if true then
-		pp(cmd:table_def()['sp.currency'])
+
+		local cn = spp.connect{
+			host = '127.0.0.1',
+			port = 3307,
+			user = 'root',
+			password = 'root',
+			db = 'sp',
+			charset = 'utf8mb4',
+		}
+
+		cn.schemas.sp = cn:extract_schema()
+
+		local function pr(cols, h)
+			local t = {}
+			for _,k in ipairs(h) do
+				add(t, fmt('%20s', k))
+			end
+			print(cat(t))
+			print()
+			for _,col in ipairs(cols) do
+				local t = {}
+				for _,k in ipairs(h) do
+					local v = col[k]
+					v = isnum(v) and fmt('%0.17g', v) or v
+					v = istab(v) and pp.format(v) or v
+					add(t, fmt('%-20s', repl(v, nil, '')))
+				end
+				print(cat(t))
+			end
+			print()
+		end
+
+		local rows, cols = cn:query({get_table_defs=1}, 'select * from test')
+		print()
+		pr(cols, {
+			'name',
+			'mysql_type',
+			'mysql_display_type',
+			'size',
+			'display_width',
+			'mysql_charset',
+			'mysql_collation',
+			'type',
+			'min',
+			'max',
+			'digits',
+			'decimals',
+			'has_time',
+			'padded',
+			'enum_values',
+			'default',
+			'mysql_default',
+			'mysql_display_charset',
+			'mysql_display_collation',
+			'mysql_buffer_type',
+		})
+
+		pp(rows)
+
+		cn:close()
+
 	end
 
 end)
