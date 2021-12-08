@@ -102,8 +102,8 @@ __Module system__
 `function sqlpp.package.NAME(spp) end`          extend the preprocessor with a module
 `spp.import(module)`                            import sqlpp module
 __Modules__
-`require'sqlpp_mysql'`                          load the code for the MySQL module
-`spp.import'mysql'`                             load the MySQL module
+`require'sqlpp_mysql'`                          make the MySQL module available
+`spp.import'mysql'`                             load the MySQL module into spp
 __Extending the preprocessor__
 `spp.keyword.KEYWORD -> symbol`                 get a symbol for a keyword
 `spp.keywords[SYMBOL] = keyword`                set a keyword for a symbol
@@ -198,16 +198,5 @@ Load a module into the preprocessor instance.
 
 ### `require'sqlpp_mysql'` <br> `spp.import'mysql'`
 
-MySQL module that extends a sqlpp instance with MySQL-specific quoting,
-DDL macros, DDL commands and MDL commands.
-
-#### Quoting
-
-MySQL-specific quoting of values: `inf` and `nan` expand to `null`,
-booleans expand to `1` and `0`.
-
-### `spp.import'mysql_domains'`
-
-MySQL module with common type domains. Provided separately as those are
-non-standard naming conventions.
+Load the MySQL module into an sqlpp instance.
 

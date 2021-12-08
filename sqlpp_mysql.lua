@@ -500,31 +500,6 @@ function sqlpp.package.mysql(spp)
 		return procsets
 	end
 
-	--column locks feature ----------------------------------------------------
-
-	local function column_locks_code(cols)
-		local code = {}
-		for col in cols:gmatch'[^%s]+' do
-			code[#code+1] = fmt(outdent([[
-				if new.%s <=> old.%s then
-					signal sqlstate '45000' set message_text = 'Read/only column: %s';
-				end if;]], '\t'), col, col, col)
-		end
-		return cat(code)
-	end
-
-	function cmd:add_column_locks(tbl, cols)
-		return self:add_trigger('col_locks', tbl, 'before update', column_locks_code(cols))
-	end
-
-	function cmd:readd_column_locks(tbl, cols)
-		return self:readd_trigger('col_locks', tbl, 'before update', column_locks_code(cols))
-	end
-
-	function cmd:drop_column_locks(tbl)
-		return self:drop_trigger('col_locks', tbl, 'before update')
-	end
-
 	--structured errors -------------------------------------------------------
 
 	spp.errno[1364] = function(self, err)
