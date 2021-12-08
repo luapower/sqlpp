@@ -2,7 +2,7 @@
 --SQL preprocessor, postprocessor and generator API.
 --Written by Cosmin Apreutesei. Public Domain.
 
-if not ... then require'schema_test'; return end
+if not ... then require'sqlpp_mysql_test'; return end
 
 local glue = require'glue'
 local errors = require'errors'

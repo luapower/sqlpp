@@ -42,7 +42,7 @@ __SQL formatting__
 `cmd:sqlrows(rows[, indent]) -> s`              format `{{a,b},{c,d}}` as `'(a, b), (c, d)'`
 `spp.tsv_rows(opt, s) -> rows`                  parse a tab-separated list into a list of rows
 `cmd:sqltsv(opt, s) -> s`                       parse a tab-separated list and format with `sqlrows()`
-`cmd:sqldiff(o, opt)`                           format a [schema] diff object
+`cmd:sqldiff(diff, opt)`                        format a [schema] diff object
 __SQL preprocessing__
 `cmd:sqlquery(sql, ...) -> sql, names`          preprocess a query
 `cmd:sqlprepare(sql, ...) -> sql, names`        preprocess a query but leave `?` placeholders
