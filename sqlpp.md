@@ -70,7 +70,7 @@ __Schema refleciton__
 `cmd:tables([db]) -> {tbl1,...}`                list tables in (current) db
 `cmd:table_def(['[DB.]TABLE|*']) -> t`          get table definition (cached)
 `cmd:extract_schema([db]) -> sc`                extract db [schema] (cached)
-`cmd:empty_schema() -> sc`                      create an empty [schema]
+`spp.empty_schema() -> sc`                      create an empty [schema]
 `cmd:clear_schema_cache()`                      clear schema cache
 __DDL commands__
 `cmd:create_db(name, [charset], [collation])`   create database
@@ -104,7 +104,6 @@ __Module system__
 __Modules__
 `require'sqlpp_mysql'`                          load the code for the MySQL module
 `spp.import'mysql'`                             load the MySQL module
-`spp.import'mysql_domains'`                     load common type domains for MySQL
 __Extending the preprocessor__
 `spp.keyword.KEYWORD -> symbol`                 get a symbol for a keyword
 `spp.keywords[SYMBOL] = keyword`                set a keyword for a symbol

@@ -30,7 +30,6 @@ function sqlpp.package.mysql(spp)
 
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
-		self.engine = 'mysql'
 		self.db = cn.db
 		function self:esc(s)
 			return cn:esc(s)
@@ -48,8 +47,7 @@ function sqlpp.package.mysql(spp)
 	end
 	function cmd:rawconnect(opt)
 		if opt and opt.fake then
-			return {fake = true, host = 'fake', port = 'fake',
-				esc = mysql.esc_utf8, engine = 'mysql'}
+			return {fake = true, host = 'fake', port = 'fake', esc = mysql.esc_utf8}
 		end
 		return pass(self, mysql.connect(opt))
 	end
@@ -89,6 +87,8 @@ function sqlpp.package.mysql(spp)
 	end
 
 	--SQL formatting ----------------------------------------------------------
+
+	spp.engine = 'mysql'
 
 	function cmd:sqltype(fld)
 		local mt = fld.mysql_type
@@ -581,32 +581,4 @@ function sqlpp.package.mysql(spp)
 	spp.errno[1451] = function(self, err) return errno_fk(self, err, 'remove') end
 	spp.errno[1452] = function(self, err) return errno_fk(self, err, 'set') end
 
-end
-
---TODO: generate these from schema.
-function sqlpp.package.mysql_domains(spp)
-	spp.subst'id       int unsigned'
-	spp.subst'pk       int unsigned primary key auto_increment'
-	spp.subst'bigid    bigint unsigned'
-	spp.subst'bigpk    bigint unsigned primary key auto_increment'
-	spp.subst'name     varchar(64)'
-	spp.subst'strid    varchar(64) character set ascii'
-	spp.subst'strpk    varchar(64) character set ascii primary key'
-	spp.subst'email    varchar(128)'
-	spp.subst'hash     varchar(64) character set ascii collate ascii_bin' --enough for tohex(hmac.sha256())
-	spp.subst'url      varchar(2048) character set ascii'
-	spp.subst'b64key   varchar(8192) character set ascii collate ascii_bin'
-	spp.subst'bool     tinyint(1) not null default 0'
-	spp.subst'bool1    tinyint(1) not null default 1'
-	spp.subst'atime    timestamp not null default current_timestamp'
-	spp.subst'ctime    timestamp not null default current_timestamp'
-	spp.subst'mtime    timestamp not null default current_timestamp on update current_timestamp'
-	spp.subst'money    decimal(15,3)' -- 999 999 999 999 . 999      (fits in a double)
-	spp.subst'qty      decimal(15,6)' --     999 999 999 . 999 999  (fits in a double)
-	spp.subst'percent  decimal(8,2)'  --         999 999 . 99
-	spp.subst'count    int unsigned not null default 0'
-	spp.subst'pos      int unsigned'
-	spp.subst'lang     char(2) character set ascii'
-	spp.subst'currency char(3) character set ascii'
-	spp.subst'country  char(2) character set ascii'
 end

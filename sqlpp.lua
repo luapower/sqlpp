@@ -450,8 +450,8 @@ function sqlpp.new()
 	end
 
 	function cmd:sqlcol(fld, tbl)
-		local DEFAULT   = self.engine..'_default'
-		local COLLATION = self.engine..'_collation'
+		local DEFAULT   = spp.engine..'_default'
+		local COLLATION = spp.engine..'_collation'
 		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
 			catargs(' ',
 				fld.unsigned and 'unsigned' or nil,
@@ -488,13 +488,13 @@ function sqlpp.new()
 	end
 
 	function cmd:sqltrigger(tbl_name, name, trg)
-		local BODY = self.engine..'_body'
+		local BODY = spp.engine..'_body'
 		return _('trigger %s %s %s on %s for each row\n%s',
 			self:sqlname(name), trg.when, trg.op, self:sqlname(tbl_name), trg[BODY])
 	end
 
 	function cmd:sqlproc(name, proc)
-		local BODY = self.engine..'_body'
+		local BODY = spp.engine..'_body'
 		local args = {}; for i,arg in ipairs(proc.args) do
 			args[i] = _('%s %s %s', arg.mode or 'in', arg.col, self:sqltype(arg))
 		end
@@ -502,7 +502,7 @@ function sqlpp.new()
 	end
 
 	function cmd:sqlcheck(name, ck)
-		local BODY = self.engine..'_body'
+		local BODY = spp.engine..'_body'
 		return _('constraint %-20s check (%s)', self:sqlname(name), ck[BODY])
 	end
 
@@ -538,8 +538,8 @@ function sqlpp.new()
 	end
 
 	function cmd:sqldiff(diff)
-		assertf(diff.engine == self.engine,
-			'diff engine is `%s`, expected `%s`', diff.engine, self.engine)
+		assertf(diff.engine == spp.engine,
+			'diff engine is `%s`, expected `%s`', diff.engine, spp.engine)
 		local dt = {}
 		local function P(...) add(dt, _(...)) end
 		local function N(s) return self:sqlname(s) end
@@ -904,48 +904,55 @@ function sqlpp.new()
 		return init(self, self:rawuse(rawconn))
 	end
 
-	function process_result_set(self, rows, fields, opt)
-		if not fields then --not a select query.
-			return
-		end
-		local fa = opt.field_attrs
-		for i,f in ipairs(fields) do
-			if opt.get_table_defs and f.table and f.db then
-				local tdef = self:table_def(f.db..'.'..f.table)
-				update(f, tdef.fields[f.col])
+	local function query_opt(self, opt)
+		if opt.get_table_defs then
+			local field_attrs = opt.field_attrs
+			local function update_field_attrs(rawconn, fields, opt)
+				if type(field_attrs) == 'function' then
+					field_attrs = field_attrs(rawconn, fields, opt)
+				end
+				for i,f in ipairs(fields) do
+					if f.table and f.db then
+						local tdef = self:table_def(f.db..'.'..f.table)
+						update(f, tdef.fields[f.col])
+					end
+					if field_attrs then
+						update(f, field_attrs[f.name])
+					end
+				end
 			end
-			update(f, fa and fa[f.name])
+			opt.field_attrs = update_field_attrs
 		end
+		return opt
 	end
 
 	local function get_result_sets(self, results, opt, param_names, ret, ...)
 		if ret == nil then return nil, ... end --error
 		local rows, again, fields = ret, ...
 		results = results or (again and {param_names = param_names}) or nil
-		if results then
+		if results then --multiple result sets
 			add(results, {rows, fields})
 			if again then
 				return get_result_sets(self, results, opt, param_names,
 					self:assert(self:rawagain(opt)))
 			else
-				for _,res in ipairs(results) do
-					process_result_set(self, res[1], res[2], opt)
-				end
 				return results
 			end
-		else
-			process_result_set(self, rows, fields, opt)
+		else --single result set
 			return rows, fields, param_names
 		end
 	end
 
 	function cmd:query(opt, sql, ...)
 
-		if type(opt) ~= 'table' then --sql, ...
+		if opt == nil then --nil, ...
+			return self:query(sql, ...)
+		elseif type(opt) ~= 'table' then --sql, ...
 			return self:query(empty, opt, sql, ...)
-		elseif type(sql) == 'table' then --opt1, ..., sql, ...
+		elseif type(sql) == 'table' then --opt1, opt2, ...
 			return self:query(update(opt, sql), ...)
 		end
+		opt = query_opt(opt)
 
 		local param_names
 		if opt.parse ~= false then
@@ -955,6 +962,7 @@ function sqlpp.new()
 		if self:sql_has_ddl(sql) then
 			self:schema_changed()
 		end
+
 		return get_result_sets(self, nil, opt, param_names,
 			self:assert(self:rawquery(sql, opt)))
 	end
@@ -973,7 +981,7 @@ function sqlpp.new()
 	end
 
 	function cmd:each_group(col, ...)
-		local rows = self:exec_with_options(empty, ...)
+		local rows = self:exec_with_options(nil, ...)
 		return spp.each_group(col, rows)
 	end
 
@@ -997,17 +1005,14 @@ function sqlpp.new()
 		end
 	end
 
-	function cmd:exec(...)
-		return self:exec_with_options(nil, ...)
-	end
-
 	function cmd:prepare(opt, sql, ...)
 
 		if type(opt) ~= 'table' then --sql, ...
 			return self:prepare(empty, opt, sql, ...)
-		elseif type(sql) == 'table' then --opt1, opt2, sql, ...
+		elseif type(sql) == 'table' then --opt1, opt2, ...
 			return self:prepare(update(opt, sql), ...)
 		end
+		opt = query_opt(opt)
 
 		local param_names, param_map
 		if opt.parse ~= false then
@@ -1035,6 +1040,10 @@ function sqlpp.new()
 				local opt = exec_opt and update(exec_opt, opt) or opt
 				return get_result_sets(cmd, nil, opt, param_names,
 					cmd:assert(cmd:rawstmt_query(rawstmt, opt, unpack(t, 1, t.n))))
+			end
+
+			function stmt:exec(...)
+				return self:exec_with_options(nil, ...)
 			end
 
 			return stmt, param_names
@@ -1085,12 +1094,6 @@ function sqlpp.new()
 		return attr(self:server_cache(), 'schema')
 	end
 
-	spp.table_attrs = {} --{db.tbl->attrs}
-	spp.col_attrs = {} --{db.tbl.col->attrs}
-	spp.mysql_col_type_attrs = {} --{col_type->attrs}
-	spp.col_type_attrs = {} --{col_type->attrs}
-	spp.col_name_attrs = {} --{col_name->attrs}
-
 	local function strip_ticks(s)
 		return s:gsub('^`', ''):gsub('`$', '')
 	end
@@ -1109,6 +1112,12 @@ function sqlpp.new()
 		if db and tbl then --single table, check the cache.
 			db  = strip_ticks(db)
 			tbl = strip_ticks(tbl)
+			if self.schemas then
+				local schema = self.schemas[db]
+				if schema then
+					return schema.tables[tbl]
+				end
+			end
 			db_tbl = db..'.'..tbl
 			local def = cache[db_tbl]
 			if def then
@@ -1117,15 +1126,6 @@ function sqlpp.new()
 		end
 		local defs = self:get_table_defs(db, tbl, opt)
 		for db_tbl, def in pairs(defs) do
-			update(def, spp.table_attrs[db_tbl])
-			for _,field in ipairs(def.fields) do
-				local col = field.col
-				local col_attrs = spp.col_attrs[db_tbl..'.'..col]
-				update(field, col_attrs) --can change field's type.
-				update(field, spp.col_name_attrs[col]) --can change field's type.
-				update(field, spp.col_type_attrs[field.type])
-				update(field, spp.mysql_col_type_attrs[field.mysql_type])
-			end
 			cache[db_tbl] = def
 		end
 		return defs
@@ -1137,9 +1137,13 @@ function sqlpp.new()
 		end
 	end
 
-	function cmd:empty_schema()
+	function spp.empty_schema()
 		local schema = require'schema'
-		return schema.new(update({engine = self.engine}, spp.schema_options))
+		return schema.new(update({engine = spp.engine}, spp.schema_options))
+	end
+
+	function cmd:empty_schema()
+		return spp.empty_schema()
 	end
 
 	function cmd:extract_schema(db)
@@ -1411,13 +1415,6 @@ function sqlpp.new()
 				%s
 		]], self:sqlname(tbl), cols_sql, rows_sql)
 		return pass(self:query({parse = false}, sql))
-	end
-
-	function cmd:update_from_select(vals, select_fields, update_tables)
-		for i,tbl in names(update_tables) do
-			local tdef = self:table_def(tbl)
-			--select_fields
-		end
 	end
 
 	return spp
