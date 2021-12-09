@@ -1107,7 +1107,7 @@ function sqlpp.new()
 	--DDL commands ------------------------------------------------------------
 
 	function cmd:create_db(name, charset, collation)
-		return self:query(outdent[[
+		return self:assert(self:query(outdent[[
 			create database if not exists ::name
 				#if charset
 				character set {charset}
@@ -1119,7 +1119,7 @@ function sqlpp.new()
 				name      = name,
 				charset   = charset,
 				collation = collation,
-			})
+			}))
 	end
 
 	function cmd:drop_db(name)
