@@ -34,7 +34,6 @@ information tables. Use `sqlpp_mysql.lua` as a reference for how to do all that.
 `sqlpp.new() -> spp`                            create a preprocessor instance
 `spp.connect(options) -> cmd`                   connect to a database
 `spp.use(rawconn) -> cmd`                       use an existing connection
-`spp.host`, `spp.port`, `spp.db`                connection info
 __SQL formatting__
 `cmd:sqlname(s) -> s`                           format name: `'foo.bar'` -> `'`foo`.`bar`'`
 `cmd:esc(s) -> s`                               escape a string to be used inside SQL string literals
@@ -125,6 +124,9 @@ the MySQL engine is implemented in the module `sqlpp_mysql`.
 ### `spp.connect(options) -> cmd` <br> `spp.use(rawconn) -> cmd`
 
 Make a command API based on a low-level query execution API.
+Options are passed-through to the connector. Additional option:
+
+ * `schema`: set a [schema] for the chosen database.
 
 ### `cmd:sqlquery(sql, ...) -> sql, names`
 

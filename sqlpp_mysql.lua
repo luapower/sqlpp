@@ -31,7 +31,7 @@ function sqlpp.package.mysql(spp)
 
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
-		self.db = cn.db
+		self.server_cache_key = cn.host..':'..cn.port
 		function self:esc(s)
 			return cn:esc(s)
 		end

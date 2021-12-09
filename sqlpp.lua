@@ -180,7 +180,6 @@ function sqlpp.new()
 		if s:sub(1, 1) == '`' then
 			return s
 		end
-		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
 		return s:gsub('[^%.]+', function(s)
 			return self:is_reserved_word(s) and '`'..trim(s)..'`' or s
 		end)
@@ -293,6 +292,8 @@ function sqlpp.new()
 	end
 
 	local function sqlquery(self, prepare, sql, ...)
+
+		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
 
 		local args, params = args_params(...)
 
@@ -858,35 +859,37 @@ function sqlpp.new()
 		errors.raise(err)
 	end
 
-	function init(self, rawconn)
+	local function init_conn(self, opt, rawconn)
 		self.rawconn = rawconn
-		self.server_cache_key = rawconn.host..':'..rawconn.port
-		self.host      = rawconn.host
-		self.port      = rawconn.port
-		self.charset   = rawconn.charset
-		self.collation = rawconn.collation
+		self.db = rawconn.db
 		self.schemas = attr(self:server_cache(), 'schemas')
+		if self.db and opt.schema then
+			self.schemas[self.db] = opt.schema
+		end
 		return self
 	end
 
 	function spp.connect(opt)
 		local self = update({}, cmd)
-		return init(self, self:assert(self:rawconnect(opt)))
+		return init_conn(self, opt, self:assert(self:rawconnect(opt)))
 	end
 
 	function cmd:close()
 		self:assert(self.rawconn:close())
 	end
 
-	function cmd:use(db)
+	function cmd:use(db, schema)
 		self:assert(self.rawconn:use(db))
 		self.db = self.rawconn.db
+		if self.db and schema then
+			self.schemas[self.db] = schema
+		end
 		return self
 	end
 
 	function spp.use(rawconn)
 		local self = update({}, cmd)
-		return init(self, self:rawuse(rawconn))
+		return init_conn(self, self:rawuse(rawconn))
 	end
 
 	local function query_opt(self, opt)
