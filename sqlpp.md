@@ -6,7 +6,7 @@ Written as a generic wrapper over your favorite SQL connector library,
 its purpose is to give SQL more power, unlike ORMs which take away even
 the one it has. So definitely not for OOP-heads. If you like SQL though,
 sqlpp will help you make dynamic queries, generate update queries for you
-from structored data, extract database schema into a structured format
+from structured data, extract database schema into a structured format
 and even generate DDL SQL from [schema] diffs so you can automate your
 migrations.
 
