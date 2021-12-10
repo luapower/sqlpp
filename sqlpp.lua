@@ -481,7 +481,7 @@ function sqlpp.new()
 	function cmd:sqlproc(name, proc)
 		local BODY = spp.engine..'_body'
 		local args = {}; for i,arg in ipairs(proc.args) do
-			args[i] = _('%s %s %s', arg.mode or 'in', arg.col, self:sqltype(arg))
+			args[i] = _('%s %s', arg.mode or 'in', self:sqlcol(arg))
 		end
 		return _('procedure %s (\n\t%s\n)\n%s', name, cat(args, ',\n\t'), proc[BODY])
 	end
@@ -561,7 +561,7 @@ function sqlpp.new()
 				if tbl.rows then
 					P('insert into %s values\n%s',
 						self:sqlname(tbl_name), self:sqlrows(tbl.rows,
-							{n = #tbl.fields, indexnt = '\t'}))
+							{n = #tbl.fields, indent = '\t'}))
 				end
 			end
 		end
