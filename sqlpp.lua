@@ -147,19 +147,16 @@ function sqlpp.new()
 
 	--quoting -----------------------------------------------------------------
 
-	spp.keywords = {} --{sym->k}
-	spp.keyword = {}
-	setmetatable(spp.keyword, {
-		__index = function(t, k)
-			local sym = {}
-			t[k] = sym
-			spp.keywords[sym] = k
-			return sym
-		end,
-	})
+	local symbols = {} --{sym -> sql}
+	spp.symbol_for = {} --{keyword -> sym}
 
-	do local _ = spp.keyword.null end
-	do local _ = spp.keyword.default end
+	function spp.define_symbol(sql, sym)
+		assertf(not spp.symbol_for[sql], 'symbol already defined for `%s`', sql)
+		sym = sym or {sql}
+		symbols[sym] = sql
+		spp.symbol_for[sql] = sym
+		return sym
+	end
 
 	function cmd:sqlstring(s)
 		return "'"..self:esc(s).."'"
@@ -180,6 +177,7 @@ function sqlpp.new()
 		if s:sub(1, 1) == '`' then
 			return s
 		end
+		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
 		return s:gsub('[^%.]+', function(s)
 			return self:is_reserved_word(s) and '`'..trim(s)..'`' or s
 		end)
@@ -197,6 +195,8 @@ function sqlpp.new()
 			return self:sqlstring(v)
 		elseif type(v) == 'boolean' then
 			return self:sqlboolean(v)
+		elseif symbols[v] then
+			return symbols[v]
 		elseif type(v) == 'table' then
 			if #v > 0 then --list: for use in `in (?)`
 				local t = {}
@@ -207,8 +207,6 @@ function sqlpp.new()
 			else --empty list: good for 'in (?)' but NOT GOOD for `not in (?)` !!!
 				return 'null'
 			end
-		elseif spp.keywords[v] then
-			return spp.keywords[v]
 		else
 			error('invalid value ' .. v)
 		end
@@ -258,6 +256,7 @@ function sqlpp.new()
 	--named params & positional args substitution -----------------------------
 
 	function cmd:sqlparams(sql, vals)
+		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
 		local names = {}
 		return sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 				add(names, k)
@@ -271,6 +270,7 @@ function sqlpp.new()
 	end
 
 	function cmd:sqlargs(sql, vals) --not used
+		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
 		local i = 0
 		return (sql:gsub('%?%?', function() -- ??
 				i = i + 1
@@ -443,8 +443,8 @@ function sqlpp.new()
 				fld.not_null and 'not null' or nil,
 				fld.auto_increment and 'auto_increment' or nil,
 				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
-				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]),
-				fld[ON_UPDATE] ~= nil and 'on update '..fld[ON_UPDATE],
+				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]) or nil,
+				fld[ON_UPDATE] ~= nil and 'on update '..self:sqlval(fld[ON_UPDATE]) or nil,
 				fld.comment and 'comment '..self:sqlval(fld.comment) or nil
 			) or '')
 	end
@@ -458,7 +458,7 @@ function sqlpp.new()
 	end
 
 	function cmd:sqlix(name, ix)
-		return _('index %-20s (%s)%s', self:sqlname(name), ix_cols(self, ix))
+		return _('index %-20s (%s)', self:sqlname(name), ix_cols(self, ix))
 	end
 
 	function cmd:sqlfk(name, fk)
@@ -488,7 +488,7 @@ function sqlpp.new()
 
 	function cmd:sqlcheck(name, ck)
 		local BODY = spp.engine..'_body'
-		return _('constraint %-20s check (%s)', self:sqlname(name), ck[BODY])
+		return _('constraint %-20s check (%s)', self:sqlname(name), ck[BODY] or ck.body)
 	end
 
 	function cmd:sqltable(t)
@@ -507,11 +507,6 @@ function sqlpp.new()
 		if t.ixs then
 			for name, ix in sortedpairs(t.ixs) do
 				add(dt, self:sqlix(name, ix))
-			end
-		end
-		if t.fks then
-			for name, fk in sortedpairs(t.fks) do
-				add(dt, self:sqlfk(name, fk))
 			end
 		end
 		if t.checks then
@@ -560,8 +555,13 @@ function sqlpp.new()
 						return a.pos < b.pos
 					end
 					for tg_name, tg in sortedpairs(tgs, cmp_tg) do
-						add(dt, 'create '..self:sqltrigger(tbl_name, tg_name, tg))
+						P('create %s', self:sqltrigger(tbl_name, tg_name, tg))
 					end
+				end
+				if tbl.rows then
+					P('insert into %s values\n%s',
+						self:sqlname(tbl_name), self:sqlrows(tbl.rows,
+							{n = #tbl.fields, indexnt = '\t'}))
 				end
 			end
 		end
@@ -657,7 +657,7 @@ function sqlpp.new()
 		end
 		if diff.procs and diff.procs.add then
 			for proc_name, proc in sortedpairs(diff.procs.add) do
-				add(dt, 'create '..self:sqlproc(proc_name, proc))
+				P('create %s', self:sqlproc(proc_name, proc))
 			end
 		end
 		return dt
@@ -698,7 +698,7 @@ function sqlpp.new()
 				pad_dirs[i] = type(v) == 'number' and 'l' or 'r'
 				local col = as_col_map[as_col]
 				local field = opt.fields and opt.fields[col]
-				local s = self:sqlval(v, field)
+				local s = tostring(self:sqlval(v, field))
 				srow[i] = s
 				max_sizes[i] = math.max(max_sizes[i] or 0, #s)
 			end
@@ -1095,7 +1095,7 @@ function sqlpp.new()
 	end
 
 	function cmd:extract_schema(db)
-		db = db or self.db
+		db = db or assert(self.db)
 		local sc = self:empty_schema()
 		for db_tbl, tbl in pairs(self:get_table_defs(db, nil, {all=1})) do
 			sc.tables[tbl.name] = tbl
@@ -1129,14 +1129,19 @@ function sqlpp.new()
 	function cmd:sync_schema(src, opt)
 		opt = opt or empty
 		local schema = require'schema'
-		local src_sc = schema.isschema(src) and src or src:extract_schema()
+		local src_sc =
+			schema.isschema(src) and src
+			or sqlpp.ispp(src) and src:extract_schema()
+			or assertf(false, 'schema or sqlpp expected, got %s', type(src))
 		local this_sc = self:extract_schema()
 		local diff = schema.diff(this_sc, src_sc)
-		local sql = cat(this_sc:sqldiff(diff), '\n')
-		if opt.dry then
-			print(sql)
-		else
-			return self:query(sql)
+		local qopt = {parse = false}
+		for _,sql in ipairs(self:sqldiff(diff)) do
+			if opt.dry then
+				print(sql)
+			else
+				self:query(qopt, sql)
+			end
 		end
 	end
 
@@ -1186,7 +1191,8 @@ function sqlpp.new()
 	function cmd:add_fk(tbl, col, ftbl, ...)
 		if self:fk_exists(fkname(tbl, col)) then return end
 		return self:query('alter table ?? add ' ..
-			spp.macro.fk(self, self:sqlname(tbl), self:sqlname(col), self:sqlname(ftbl or col), ...), self:sqlname(tbl))
+			spp.macro.fk(self, self:sqlname(tbl), self:sqlname(col),
+				self:sqlname(ftbl or col), ...), self:sqlname(tbl))
 	end
 
 	function cmd:add_uk(tbl, col)
@@ -1350,6 +1356,7 @@ function sqlpp.new()
 			col_map = col_map,
 			fields = tdef.fields,
 			compact = compact,
+			indent = '\t',
 		})
 		local t = {}
 		for i,s in ipairs(glue.keys(col_map, true)) do

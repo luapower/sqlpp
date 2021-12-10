@@ -99,10 +99,10 @@ function sqlpp.package.mysql(spp)
 			local function sqlval(s) return self:sqlval(s) end
 			local vals = fld.enum_values or fld.set_values
 			return _('%s(%s)', mt, cat(imap(vals, sqlval), ', '))
-		elseif mt == 'varchar' then
+		elseif mt == 'varchar' or mt == 'char' then
 			local maxlen = fld.maxlen or mysql.char_size(fld.size, fld.mysql_collation)
 			return _('%s(%d)', mt, maxlen)
-		elseif mt == 'varbinary' then
+		elseif mt == 'varbinary' or mt == 'binary' then
 			return _('%s(%d)', mt, fld.size)
 		else
 			return mt
@@ -253,7 +253,7 @@ function sqlpp.package.mysql(spp)
 				field.mysql_default = row.column_default
 				field.default = row.column_default --not used in DDL, sent to client.
 				if field.type == 'date' and field.mysql_default == 'CURRENT_TIMESTAMP' then
-					field.mysql_default = 'current_timestamp'
+					field.mysql_default = spp.symbol_for.current_timestamp
 					field.default = nil
 				end
 				field.mysql_on_update = row.extra
@@ -564,3 +564,11 @@ function sqlpp.package.mysql(spp)
 	spp.errno[1452] = function(self, err) return errno_fk(self, err, 'set') end
 
 end
+
+return {
+	new = function(...)
+		local spp = sqlpp.new(...)
+		spp.import'mysql'
+		return spp
+	end,
+}
