@@ -518,30 +518,76 @@ function sqlpp.new()
 	end
 
 	function cmd:sqldiff(diff)
+
 		assertf(diff.engine == spp.engine,
 			'diff engine is `%s`, expected `%s`', diff.engine, spp.engine)
+
 		local dt = {}
+
 		local function P(...) add(dt, _(...)) end
 		local function N(s) return self:sqlname(s) end
+
+		local fk_bin = {} --{fk->true}
+
+		--gather fks pointing to tables that need to be removed.
+		if diff.tables and diff.tables.remove then
+			for _, fk in pairs(tbl.fks) do
+				if diff.tables.remove[fk.ref_table] then
+					fk_bin[fk] = true
+				end
+			end
+		end
+
+		if diff.tables and diff.tables.update then
+			for tbl_name, d in sortedpairs(diff.tables.update) do
+
+				--gather fks pointing to fields that need to be removed.
+				if d.fields and d.fields.remove then
+					for col in pairs(d.fields.remove) do
+						for _, tbl in pairs(diff.old_schema.tables) do
+							if tbl.fks then
+								for fk_name, fk in pairs(tbl.fks) do
+									for _, ref_col in ipairs(fk.ref_cols) do
+										if ref_col == col then
+											fk_bin[fk] = true
+										end
+									end
+								end
+							end
+						end
+					end
+				end
+
+				--gather fks that need to be explicitly removed.
+				if d.fks and d.fks.remove then
+					for _,fk in pairs(d.fks.remove) do
+						fk_bin[fk] = true
+					end
+				end
+
+			end
+		end
+
+		--drop gathered fks.
+		for fk in sortedpairs(fk_bin, function(fk1, fk2) return fk1.name < fk2.name end) do
+			P('alter table %-16s drop %-16s %s', N(fk.table), 'foreign key', N(fk.name))
+		end
+
+		--drop procs.
 		if diff.procs and diff.procs.remove then
 			for proc_name in sortedpairs(diff.procs.remove) do
 				P('drop %-16s %s', 'procedure', N(proc_name))
 			end
 		end
-		if diff.tables and diff.tables.update then
-			for tbl_name, d in sortedpairs(diff.tables.update) do
-				if d.fks and d.fks.remove then
-					for fk_name in sortedpairs(d.fks.remove) do
-						P('alter table %-16s drop %-16s %s', N(tbl_name), 'foreign key', N(fk_name))
-					end
-				end
-			end
-		end
+
+		--drop tables.
 		if diff.tables and diff.tables.remove then
 			for tbl_name in sortedpairs(diff.tables.remove) do
 				P('drop table %s', N(tbl_name))
 			end
 		end
+
+		--add new tables.
 		if diff.tables and diff.tables.add then
 			for tbl_name, tbl in sortedpairs(diff.tables.add) do
 				P('create table %-16s %s', N(tbl_name), self:sqltable(tbl))
@@ -565,6 +611,8 @@ function sqlpp.new()
 				end
 			end
 		end
+
+		--update tables.
 		if diff.tables and diff.tables.update then
 			for tbl_name, d in sortedpairs(diff.tables.update) do
 				if d.fields and d.fields.remove then
@@ -635,31 +683,38 @@ function sqlpp.new()
 				end
 			end
 		end
+
+		--add new fks for current tables.
 		if diff.tables and diff.tables.update then
 			for tbl_name, d in sortedpairs(diff.tables.update) do
 				if d.fks and d.fks.add then
 					for fk_name, fk in sortedpairs(d.fks.add) do
-						P('alter table %s add %s',
+						P('alter table %-16s add %s',
 							N(tbl_name), self:sqlfk(fk_name, fk))
 					end
 				end
 			end
 		end
+
+		--add new fks for added tables.
 		if diff.tables and diff.tables.add then
 			for tbl_name, tbl in sortedpairs(diff.tables.add) do
 				if tbl.fks then
 					for fk_name, fk in sortedpairs(tbl.fks) do
-						P('alter table %s add %s',
+						P('alter table %-16s add %s',
 							N(tbl_name), self:sqlfk(fk_name, fk))
 					end
 				end
 			end
 		end
+
+		--add new procs.
 		if diff.procs and diff.procs.add then
 			for proc_name, proc in sortedpairs(diff.procs.add) do
 				P('create %s', self:sqlproc(proc_name, proc))
 			end
 		end
+
 		return dt
 	end
 

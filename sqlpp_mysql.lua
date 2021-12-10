@@ -126,7 +126,6 @@ function sqlpp.package.mysql(spp)
 			auto_increment=1,
 			comment=1,
 			mysql_type=1,
-			mysql_charset=1,
 			mysql_collation=1,
 			mysql_default=1,
 			mysql_on_update=1,
@@ -180,12 +179,15 @@ function sqlpp.package.mysql(spp)
 		elseif mt == 'enum' then
 			dt.type = 'enum'
 			dt.enum_values = parse_values(t.column_type)
+			dt.mysql_charset = t.character_set_name
+			dt.mysql_collation = t.collation_name
 		elseif mt == 'set' then
 			dt.type = 'set'
 			dt.set_values = parse_values(t.column_type)
 		elseif mt == 'varchar' or mt == 'char'
 			or mt == 'tinytext' or mt == 'text'
 			or mt == 'mediumtext' or mt == 'longtext'
+			or mt == 'enum'
 		then
 			dt.type = 'text'
 			dt.padded = mt == 'char' or nil
@@ -257,18 +259,19 @@ function sqlpp.package.mysql(spp)
 					field.default = nil
 				end
 				field.mysql_on_update = row.extra
-					and row.extra:lower():match'^on update (.*)'
+					and row.extra:match'on update CURRENT_TIMESTAMP'
+					and spp.symbol_for.current_timestamp
 				fields[i] = field
 				fields[col] = field
 			end
 			tables[db_tbl] = {
 				db = db, name = grp[1].table_name, fields = fields,
-				pk = {},
 			}
 		end
 
 		local function row_col(row) return row.col end
 		local function row_ref_col(row) return row.ref_col end
+		local function return_false() return false end
 
 		for i, db_tbl, constraints in spp.each_group('db_tbl', self:assert(self:rawquery([[
 			select
@@ -298,7 +301,7 @@ function sqlpp.package.mysql(spp)
 						db  and 'cs.table_schema = '..sql_db,
 						tbl and 'cs.table_name   = '..sql_tbl) or '1 = 1')..[[
 			order by
-				cs.table_schema, cs.table_name, kcu.ordinal_position
+				cs.table_schema, cs.table_name, cs.constraint_name, kcu.ordinal_position
 			]])))
 		do
 			local tbl = tables[db_tbl]
@@ -314,19 +317,18 @@ function sqlpp.package.mysql(spp)
 						field.ref_table = ref_tbl
 						field.ref_col = grp[1].ref_col
 					end
+					local cols = imap(grp, row_col)
+					cols.desc = imap(cols, return_false) --in case there's no matching index.
 					attr(tbl, 'fks')[cs_name] = {
 						table     = tbl.name,
 						ref_table = ref_tbl,
-						cols      = imap(grp, row_col),
+						cols      = cols,
 						ref_cols  = imap(grp, row_ref_col),
 						onupdate  = repl(grp[1].onupdate:lower(), 'no action', nil),
 						ondelete  = repl(grp[1].ondelete:lower(), 'no action', nil),
 					}
-					attr(tbl, 'deps')[ref_tbl] = true
 				elseif cs_type == 'UNIQUE' then
-					attr(tbl, 'uks')[cs_name] = {
-						cols = imap(grp, row_col),
-					}
+					attr(tbl, 'uks')[cs_name] = imap(grp, row_col)
 				end
 			end
 
@@ -359,7 +361,7 @@ function sqlpp.package.mysql(spp)
 							db  and 's.table_schema = '..sql_db,
 							tbl and 's.table_name   = '..sql_tbl) or '1 = 1')..[[
 				order by
-					s.table_schema, s.table_name, s.seq_in_index
+					s.table_schema, s.table_name, s.index_name, s.seq_in_index
 				]])))
 			do
 				local tbl = tables[db_tbl]
@@ -409,7 +411,7 @@ function sqlpp.package.mysql(spp)
 				local tbl = tables[db_tbl]
 				for i, row in ipairs(checks) do
 					attr(tbl, 'checks')[row.constraint_name] = {
-						mysql_body = row.check_clause,
+						mysql_body = row.check_clause:gsub('`', ''):gsub('^%(', ''):gsub('%)$', ''),
 					}
 				end
 			end
