@@ -19,12 +19,11 @@ migrations.
  * `??` and `::foo` quoted-name substitutions
  * `{foo}` unquoted substitutions
  * symbol substitutions (for encoding `null` and `default`)
- * removing double-dash comments (for [mysql_client])
+ * removing double-dash comments (for [mysql])
 
 ### Backends & writing your own
 
-SQLpp currently supports MySQL via [mysql_client] and Tarantool via
-[tarantool] client.
+SQLpp currently supports [mysql] and [tarantool] clients.
 
 Writing a backend for your favorite RDBMS is easy. At the minimum you have
 to show sqlpp how to connect to your engine and how to quote strings,
