@@ -1,7 +1,5 @@
 
-local spp = require'sqlpp'.new()
-require'sqlpp_mysql'
-spp.import'mysql'
+local spp = require'sqlpp'.new'mysql'
 require'$'
 
 if false then

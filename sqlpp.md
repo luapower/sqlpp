@@ -23,15 +23,18 @@ migrations.
 
 ### Backends & writing your own
 
-SQLpp currently only supports MySQL via [mysql_client]. Writing a backend
-for your favorite RDBMS is easy though. At the minimum you have to show
-sqlpp how to connect to your engine and how to quote strings, and if you
-want schema diffs you have to write the queries to extract metadata from
-information tables. Use `sqlpp_mysql.lua` as a reference for how to do all that.
+SQLpp currently supports MySQL via [mysql_client] and Tarantool via
+[tarantool] client.
+
+Writing a backend for your favorite RDBMS is easy. At the minimum you have
+to show sqlpp how to connect to your engine and how to quote strings,
+and if you want schema diffs you have to write the queries to extract metadata
+from information tables. Use `sqlpp_mysql.lua` or `sqlpp_tarantoo.lua`
+as a reference for how to do all that.
 
 ## API Summary
 ----------------------------------------------- ------------------------------
-`sqlpp.new() -> spp`                            create a preprocessor instance
+`sqlpp.new(engine) -> spp`                      create a preprocessor instance
 `spp.connect(options) -> cmd`                   connect to a database
 `spp.use(rawconn) -> cmd`                       use an existing connection
 __SQL formatting__
@@ -75,23 +78,6 @@ __DDL commands__
 `cmd:create_db(name, [charset], [collation])`   create database
 `cmd:drop_db(name)`                             drop database
 `cmd:sync_schema(source_schema)`                sync schema with a source schema
-`cmd:drop_table(name)`                          drop table
-`cmd:drop_tables('T1 ...')`                     drop tables
-`cmd:add_column(tbl, name, type_pos)`           add column
-`cmd:rename_column(tbl, oldname, newname)`      rename column
-`cmd:drop_column(tbl, col)`                     drop column
-`cmd:[re]add_fk(tbl, col, ...)`                 (re)create foreign key
-`cmd:[re]add_uk(tbl, col)`                      (re)create unique key
-`cmd:[re]add_ix(tbl, col)`                      (re)create index
-`cmd:drop_fk(tbl, col)`                         drop foreign key
-`cmd:drop_uk(tbl, col)`                         drop unique key
-`cmd:drop_ix(tbl, col)`                         drop index
-`cmd:[re]add_trigger(name, tbl, on, code)`      (re)create trigger
-`cmd:drop_trigger(name, tbl, on)`               drop trigger
-`cmd:[re]add_proc(name, args, code)`            (re)create stored procedure
-`cmd:drop_proc(name)`                           drop stored procedure
-`cmd:[re]add_column_locks(tbl, cols)`           trigger to make columns read-only
-`cmd:drop_column_locks(tbl)`                    drop all column locks on a table
 __MDL commands__
 `cmd:insert_row(tbl, vals, col_map)`            insert a row
 `cmd:insert_rows(tbl, rows, col_map, compact)`  insert rows with one query

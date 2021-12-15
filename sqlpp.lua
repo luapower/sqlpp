@@ -29,7 +29,12 @@ local sqlpp = {package = {}}
 
 function sqlpp.ispp(v) return type(v) == 'table' and v.is_sqlpp or false end
 
-function sqlpp.new()
+function sqlpp.new(init)
+
+	assert(init, 'engine module name or engine init function expected')
+	if type(init) == 'string' then
+		init = require('sqlpp_'..init).init_spp
+	end
 
 	local spp = {is_sqlpp = true}
 	local cmd = {}
@@ -171,24 +176,29 @@ function sqlpp.new()
 	end
 
 	--NOTE: don't use dots in db names, table names and column names!
+	cmd.sqlname_quote = '"'
 	function cmd:sqlname(s)
-		s = trim(s)
-		assert(s, 'sql name missing')
-		if s:sub(1, 1) == '`' then
+		s = s and trim(s) or ''
+		assert(s ~= '', 'sql name missing')
+		local q = self.sqlname_quote
+		if s:sub(1, 1) == q then
 			return s
 		end
-		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
+		if not s:find('.', 1 , true) then
+			return self:needs_quoting(s) and q..s..q or s
+		end
+		self:needs_quoting() --avoid yield accross C-call boundary :rolleyes:
 		return s:gsub('[^%.]+', function(s)
-			return self:is_reserved_word(s) and '`'..trim(s)..'`' or s
+			return self:needs_quoting(s) and q..trim(s)..q or s
 		end)
 	end
 
 	function cmd:sqlval(v, field)
-		local to_sql = field and field.to_sql
+		local to_sql = field and field[spp.TO_SQL]
 		if v == nil then
 			return 'null'
 		elseif to_sql then
-			return to_sql(v)
+			return to_sql(v, field)
 		elseif type(v) == 'number' then
 			return self:sqlnumber(v)
 		elseif type(v) == 'string' then
@@ -256,44 +266,40 @@ function sqlpp.new()
 	--named params & positional args substitution -----------------------------
 
 	function cmd:sqlparams(sql, vals)
-		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
+		self:needs_quoting() --avoid yield accross C-call boundary :rolleyes:
 		local names = {}
 		return sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 				add(names, k)
-				local v, err = self:sqlname(vals[k])
-				return assertf(v, 'param %s: %s\n%s', k, err, sql)
+				return self:sqlname(vals[k])
 			end):gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
 				add(names, k)
-				local v, err = self:sqlval(vals[k])
-				return assertf(v, 'param %s: %s\n%s', k, err, sql)
+				return self:sqlval(vals[k])
 			end), names
 	end
 
 	function cmd:sqlargs(sql, vals) --not used
-		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
+		self:needs_quoting() --avoid yield accross C-call boundary :rolleyes:
 		local i = 0
 		return (sql:gsub('%?%?', function() -- ??
 				i = i + 1
-				local v, err = self:sqlname(vals[i])
-				return assertf(v, 'param %d: %s\n%s', i, err, sql)
+				return self:sqlname(vals[i])
 			end):gsub('%?', function() -- ?
 				i = i + 1
-				local v, err = self:sqlval(vals[i])
-				return assertf(v, 'param %d: %s\n%s', i, err, sql)
+				return self:sqlval(vals[i])
 			end))
 	end
 
 	--preprocessor ------------------------------------------------------------
 
 	local function args_params(...)
-		local args = select('#', ...) > 0 and {...} or empty
+		local args = select('#', ...) > 0 and pack(...) or empty
 		local params = type((...)) == 'table' and (...) or empty
 		return args, params
 	end
 
 	local function sqlquery(self, prepare, sql, ...)
 
-		self:is_reserved_word() --avoid yield accross C-call boundary :rolleyes:
+		self:needs_quoting() --avoid yield accross C-call boundary :rolleyes:
 
 		local args, params = args_params(...)
 
@@ -350,8 +356,7 @@ function sqlpp.new()
 		--collect named params
 		sql = sql:gsub('::([%w_]+)', function(k) -- ::col, ::table, etc.
 				add(param_names, k)
-				local v, err = self:sqlname(params[k])
-				add(repl, assertf(v, 'param %s: %s', k, err))
+				add(repl, self:sqlname(params[k]))
 				return mark(#repl)
 			end):gsub(':([%w_][%w_%:]*)', function(k) -- :foo, :foo:old, etc.
 				add(param_names, k)
@@ -359,8 +364,7 @@ function sqlpp.new()
 					add(param_map, k)
 					add(repl, '?')
 				else
-					local v, err = opt and opt.prepare and '?' or self:sqlval(params[k])
-					add(repl, assertf(v, 'param %s: %s', k, err))
+					add(repl, opt and opt.prepare and '?' or self:sqlval(params[k]))
 				end
 				return mark(#repl)
 			end)
@@ -369,8 +373,7 @@ function sqlpp.new()
 		local i = 0
 		sql = sql:gsub('%?%?', function() -- ??
 				i = i + 1
-				local v, err = self:sqlname(args[i])
-				add(repl, assertf(v, 'param %d: %s', i, err))
+				add(repl, self:sqlname(args[i]))
 				return mark(#repl)
 			end):gsub('%?', function() -- ?
 				i = i + 1
@@ -378,8 +381,7 @@ function sqlpp.new()
 					add(param_map, i)
 					add(repl, '?')
 				else
-					local v, err = self:sqlval(args[i])
-					add(repl, assertf(v, 'param %d: %s', i, err))
+					add(repl, self:sqlval(args[i]))
 				end
 				return mark(#repl)
 			end)
@@ -433,32 +435,21 @@ function sqlpp.new()
 	end
 
 	function cmd:sqlcol(fld, tbl)
-		local DEFAULT   = spp.engine..'_default'
-		local COLLATION = spp.engine..'_collation'
-		local ON_UPDATE = spp.engine..'_on_update'
 		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
-			catargs(' ',
-				fld.unsigned and 'unsigned' or nil,
-				fld[COLLATION] and 'collate '..fld[COLLATION] or nil,
-				fld.not_null and 'not null' or nil,
-				fld.auto_increment and 'auto_increment' or nil,
-				tbl and tbl.pk and #tbl.pk == 1 and fld.col == tbl.pk[1] and 'primary key' or nil,
-				fld[DEFAULT] ~= nil and 'default '..self:sqlval(fld[DEFAULT]) or nil,
-				fld[ON_UPDATE] ~= nil and 'on update '..self:sqlval(fld[ON_UPDATE]) or nil,
-				fld.comment and 'comment '..self:sqlval(fld.comment) or nil
-			) or '')
+			self:sqlcol_flags(fld, tbl) or '')
 	end
 
-	function cmd:sqlpk(pk)
-		return _('primary key (%s)', ix_cols(self, pk))
+	function cmd:sqlpk(pk, tbl_name)
+		return _('constraint %-20s primary key (%s)', 'pk_'..tbl_name, ix_cols(self, pk))
 	end
 
 	function cmd:sqluk(name, uk)
-		return _('constraint %-20s unique key (%s)', self:sqlname(name), ix_cols(self, uk))
+		return _('constraint %-20s unique (%s)', self:sqlname(name), ix_cols(self, uk))
 	end
 
-	function cmd:sqlix(name, ix)
-		return _('index %-20s (%s)', self:sqlname(name), ix_cols(self, ix))
+	function cmd:sqlix(name, ix, tbl_name)
+		return _('index %-20s on %s (%s)',
+			self:sqlname(name), self:sqlname(tbl_name), ix_cols(self, ix))
 	end
 
 	function cmd:sqlfk(name, fk)
@@ -472,14 +463,15 @@ function sqlpp.new()
 			ix_cols(self, fk.ref_cols), a1, a2)
 	end
 
-	function cmd:sqltrigger(tbl_name, name, trg)
+	function cmd:sqltrigger(tbl_name, name, tg)
 		local BODY = spp.engine..'_body'
-		return _('trigger %s %s %s on %s for each row\n%s',
-			self:sqlname(name), trg.when, trg.op, self:sqlname(tbl_name), trg[BODY])
+		return tg[BODY] and _('trigger %s %s %s on %s for each row\n%s',
+			self:sqlname(name), tg.when, tg.op, self:sqlname(tbl_name), tg[BODY])
 	end
 
 	function cmd:sqlproc(name, proc)
 		local BODY = spp.engine..'_body'
+		if not proc[BODY] then return end
 		local args = {}; for i,arg in ipairs(proc.args) do
 			args[i] = _('%s %s', arg.mode or 'in', self:sqlcol(arg))
 		end
@@ -488,7 +480,8 @@ function sqlpp.new()
 
 	function cmd:sqlcheck(name, ck)
 		local BODY = spp.engine..'_body'
-		return _('constraint %-20s check (%s)', self:sqlname(name), ck[BODY] or ck.body)
+		local s = ck[BODY] or ck.body
+		return s and _('constraint %-20s check (%s)', self:sqlname(name), s)
 	end
 
 	function cmd:sqltable(t)
@@ -496,17 +489,12 @@ function sqlpp.new()
 		for i,fld in ipairs(t.fields) do
 			dt[i] = self:sqlcol(fld, t)
 		end
-		if t.pk and #t.pk > 1 then
-			add(dt, self:sqlpk(t.pk))
+		if t.pk then
+			add(dt, self:sqlpk(t.pk, t.name))
 		end
 		if t.uks then
 			for name, uk in sortedpairs(t.uks) do
 				add(dt, self:sqluk(name, uk))
-			end
-		end
-		if t.ixs then
-			for name, ix in sortedpairs(t.ixs) do
-				add(dt, self:sqlix(name, ix))
 			end
 		end
 		if t.checks then
@@ -526,20 +514,26 @@ function sqlpp.new()
 
 		local function P(...) add(dt, _(...)) end
 		local function N(s) return self:sqlname(s) end
+		local function TN(s) return self:sqlname(s) end
+		local BODY = spp.engine..'_body'
 
 		local fk_bin = {} --{fk->true}
 
 		--gather fks pointing to tables that need to be removed.
 		if diff.tables and diff.tables.remove then
-			for _, fk in pairs(tbl.fks) do
-				if diff.tables.remove[fk.ref_table] then
-					fk_bin[fk] = true
+			for _, tbl in pairs(diff.tables.remove) do
+				if tbl.fks then
+					for _, fk in pairs(tbl.fks) do
+						if diff.tables.remove[fk.ref_table] then
+							fk_bin[fk] = true
+						end
+					end
 				end
 			end
 		end
 
 		if diff.tables and diff.tables.update then
-			for tbl_name, d in sortedpairs(diff.tables.update) do
+			for _, d in pairs(diff.tables.update) do
 
 				--gather fks pointing to fields that need to be removed.
 				if d.fields and d.fields.remove then
@@ -575,8 +569,10 @@ function sqlpp.new()
 
 		--drop procs.
 		if diff.procs and diff.procs.remove then
-			for proc_name in sortedpairs(diff.procs.remove) do
-				P('drop %-16s %s', 'procedure', N(proc_name))
+			for proc_name, proc in sortedpairs(diff.procs.remove) do
+				if proc[BODY] then
+					P('drop %-16s %s', 'procedure', N(proc_name))
+				end
 			end
 		end
 
@@ -601,7 +597,13 @@ function sqlpp.new()
 						return a.pos < b.pos
 					end
 					for tg_name, tg in sortedpairs(tgs, cmp_tg) do
-						P('create %s', self:sqltrigger(tbl_name, tg_name, tg))
+						local s = self:sqltrigger(tbl_name, tg_name, tg)
+						if s then P('create %s', s) end
+					end
+				end
+				if tbl.ixs then
+					for ix_name, ix in sortedpairs(tbl.ixs) do
+						P('create %s', self:sqlix(ix_name, ix, tbl_name))
 					end
 				end
 				if tbl.rows then
@@ -639,7 +641,8 @@ function sqlpp.new()
 					P('alter table %-16s drop primary key', N(tbl_name))
 				end
 				if d.add_pk then
-					P('alter table %-16s add %s', N(tbl_name), self:sqlpk(d.add_pk))
+					P('alter table %-16s add %s', N(tbl_name),
+						self:sqlpk(d.add_pk, tbl_name))
 				end
 				if d.uks and d.uks.remove then
 					for uk_name in sortedpairs(d.uks.remove) do
@@ -653,12 +656,12 @@ function sqlpp.new()
 				end
 				if d.ixs and d.ixs.remove then
 					for ix_name in sortedpairs(d.ixs.remove) do
-						P('alter table %-16s drop %-16s %s', N(tbl_name), 'index', N(ix_name))
+						P('drop index %-16s on %-16s', N(ix_name), N(tbl_name))
 					end
 				end
 				if d.ixs and d.ixs.add then
 					for ix_name, ix in sortedpairs(d.ixs.add) do
-						P('alter table %-16s add %s', N(tbl_name), self:sqlix(ix_name, ix))
+						P('create %s', self:sqlix(ix_name, ix, tbl_name))
 					end
 				end
 				if d.checks and d.checks.remove then
@@ -672,13 +675,14 @@ function sqlpp.new()
 					end
 				end
 				if d.triggers and d.triggers.remove then
-					for trg_name in sortedpairs(d.triggers.remove) do
-						P('drop trigger %-16s', N(trg_name))
+					for tg_name, tg in sortedpairs(d.triggers.remove) do
+						if tg[BODY] then P('drop trigger %-16s', N(tg_name)) end
 					end
 				end
 				if d.triggers and d.triggers.add then
 					for tg_name, tg in sortedpairs(d.triggers.add) do
-						P('create '..self:sqltrigger(tbl_name, tg_name, tg))
+						local s = self:sqltrigger(tbl_name, tg_name, tg)
+						if s then P('create '..s) end
 					end
 				end
 			end
@@ -711,7 +715,8 @@ function sqlpp.new()
 		--add new procs.
 		if diff.procs and diff.procs.add then
 			for proc_name, proc in sortedpairs(diff.procs.add) do
-				P('create %s', self:sqlproc(proc_name, proc))
+				local s = self:sqlproc(proc_name, proc)
+				if s then P('create %s', s) end
 			end
 		end
 
@@ -1104,8 +1109,8 @@ function sqlpp.new()
 		return self:exec_with_options({to_array=1}, 'show databases')
 	end
 
-	function cmd:tables(sch)
-		return self:exec_with_options({to_array=1}, 'show tables from ??', sch or self.db)
+	function cmd:tables(db)
+		return self:exec_with_options({to_array=1}, 'show tables from ??', db or self.db)
 	end
 
 	local server_caches = {}
@@ -1114,7 +1119,7 @@ function sqlpp.new()
 		return attr(server_caches, self.server_cache_key)
 	end
 
-	function cmd:is_reserved_word(s)
+	function cmd:needs_quoting(s)
 		local t = self:server_cache()
 		local rt = t.reserved_words
 		if not rt then
@@ -1152,7 +1157,7 @@ function sqlpp.new()
 	function cmd:extract_schema(db)
 		db = db or assert(self.db)
 		local sc = self:empty_schema()
-		for db_tbl, tbl in pairs(self:get_table_defs(db, nil, {all=1})) do
+		for db_tbl, tbl in pairs(self:get_table_defs{db = db, all=1}) do
 			sc.tables[tbl.name] = tbl
 		end
 		sc.procs = self:get_procs(db)[db]
@@ -1197,98 +1202,6 @@ function sqlpp.new()
 			else
 				self:query(qopt, sql)
 			end
-		end
-	end
-
-	function cmd:drop_table(name)
-		return self:query('drop table if exists ??', name)
-	end
-
-	function cmd:drop_tables(s)
-		local dt = {}
-		for name in s:gmatch'[^%s]+' do
-			dt[#dt+1] = self:drop_table(name)
-		end
-		return dt
-	end
-
-	function cmd:add_column(tbl, name, type_pos)
-		if self:column_exists(tbl, name) then return end
-		return self:query('alter table ?? add column ??'..type_pos, tbl, name)
-	end
-
-	function cmd:rename_column(tbl, old_name, new_name)
-		if not self:column_exists(tbl, old_name) then return end
-		return self:query('alter table ?? rename column ?? to ??', tbl, old_name, new_name)
-	end
-
-	function cmd:drop_column(tbl, name)
-		if not self:column_exists(tbl, name) then return end
-		return self:query('alter table ?? drop column ??', tbl, name)
-	end
-
-	function cmd:add_check(tbl, name, expr)
-		if self:check_exists(tbl, name) then return end
-		return self:query(fmt('alter table ?? add constraint ?? check(%s)', expr), tbl, name)
-	end
-
-	function cmd:drop_check(tbl, name)
-		if self:check_exists(tbl, name) then return end
-		return self:query('alter table ?? drop constraint ??', tbl, name)
-	end
-
-	function cmd:readd_check(tbl, name, expr)
-		if self:drop_check(tbl, name) then
-			self:add_check(tbl, name, expr)
-		end
-	end
-
-	function cmd:add_fk(tbl, col, ftbl, ...)
-		if self:fk_exists(fkname(tbl, col)) then return end
-		return self:query('alter table ?? add ' ..
-			spp.macro.fk(self, self:sqlname(tbl), self:sqlname(col),
-				self:sqlname(ftbl or col), ...), self:sqlname(tbl))
-	end
-
-	function cmd:add_uk(tbl, col)
-		if self:fk_exists(ukname(tbl, col)) then return end
-		return self:query('alter table ?? add ' .. spp.macro.uk(self:sqlname(tbl), col), tbl)
-	end
-
-	function cmd:add_ix(tbl, col)
-		if self:index_exists(ixname(tbl, col)) then return end
-		return self:query('alter table ?? add ' .. spp.macro.ix(self:sqlname(tbl), col), tbl)
-	end
-
-	local function drop_index(self, type, tbl, col)
-		local name = indexname(type, tbl, col)
-		if not self:index_exists(name) then return end
-		local s =
-			   type == 'fk' and 'foreign key'
-			or type == 'uk' and 'unique key'
-			or type == 'ix' and 'index'
-			or assert(false)
-		return self:query(fmt('alter table ?? drop %s %s', s, name), tbl)
-	end
-	function cmd:drop_fk(tbl, col) return drop_index(self, 'fk', tbl, col) end
-	function cmd:drop_uk(tbl, col) return drop_index(self, 'uk', tbl, col) end
-	function cmd:drop_ix(tbl, col) return drop_index(self, 'ix', tbl, col) end
-
-	function cmd:readd_fk(tbl, col, ...)
-		if self:drop_fk(tbl, col) then
-			return self:add_fk(tbl, col, ...)
-		end
-	end
-
-	function cmd:readd_uk(tbl, col)
-		if self:drop_uk(tbl, col) then
-			return self:add_uk(tbl, col)
-		end
-	end
-
-	function cmd:readd_ix(tbl, col)
-		if self:drop_ix(tbl, col) then
-			return self:add_ix(tbl, col)
 		end
 	end
 
@@ -1426,6 +1339,8 @@ function sqlpp.new()
 		]], self:sqlname(tbl), cols_sql, rows_sql)
 		return pass(self:query({parse = false}, sql))
 	end
+
+	init(spp, cmd)
 
 	return spp
 end

@@ -1,12 +1,21 @@
+--[[
 
---MySQL preprocessor, postprocessor and command API.
---Written by Cosmin Apreutesei. Public Domain.
+	MySQL sqlpp backend.
+	Written by Cosmin Apreutesei. Public Domain.
+
+	Schema NYI:
+	- functions
+	- index type
+	- table engine
+	- zerofill
+	- other obscure MySQL things I don't even know about?
+
+]]
 
 if not ... then require'sqlpp_mysql_test'; return end
 
-local sqlpp = require'sqlpp'
 local glue = require'glue'
-local mysql = require'mysql_client'
+local mysql = require'mysql'
 
 local fmt = string.format
 local add = table.insert
@@ -23,11 +32,9 @@ local index = glue.index
 local update = glue.update
 local empty = glue.empty
 
-function sqlpp.package.mysql(spp)
+local function init_spp(spp, cmd)
 
 	--command API -------------------------------------------------------------
-
-	local cmd = spp.command
 
 	local function pass(self, cn, ...)
 		if not cn then return cn, ... end
@@ -66,6 +73,8 @@ function sqlpp.package.mysql(spp)
 
 	--SQL quoting -------------------------------------------------------------
 
+	cmd.sqlname_quote = '`'
+
 	local sqlnumber = cmd.sqlnumber
 	function cmd:sqlnumber(v)
 		if v ~= v or v == 1/0 or v == -1/0 then
@@ -79,7 +88,7 @@ function sqlpp.package.mysql(spp)
 	end
 
 	function cmd:get_reserved_words()
-		if not self.rawquery then
+		if not self.rawquery then --fake
 			return {}
 		end
 		return index(self:assert(self:rawquery([[
@@ -87,9 +96,15 @@ function sqlpp.package.mysql(spp)
 		]], {compact = true})))
 	end
 
+	local needs_quoting = cmd.needs_quoting
+	function cmd:needs_quoting(s)
+		return needs_quoting(self, s) or (s ~= s:lower() and s ~= s:upper())
+	end
+
 	--SQL formatting ----------------------------------------------------------
 
 	spp.engine = 'mysql'
+	spp.TO_SQL = 'mysql_to_sql'
 
 	function cmd:sqltype(fld)
 		local mt = fld.mysql_type
@@ -109,6 +124,18 @@ function sqlpp.package.mysql(spp)
 		end
 	end
 
+	function cmd:sqlcol_flags(fld, tbl)
+		return catargs(' ',
+			fld.unsigned and 'unsigned' or nil,
+			fld.mysql_collation and 'collate '..fld.mysql_collation or nil,
+			fld.not_null and 'not null' or nil,
+			fld.auto_increment and 'auto_increment' or nil,
+			fld.mysql_default ~= nil and 'default '..self:sqlval(fld.mysql_default) or nil,
+			fld.mysql_on_update ~= nil and 'on update '..self:sqlval(fld.mysql_on_update) or nil,
+			fld.comment and 'comment '..self:sqlval(fld.comment) or nil
+		)
+	end
+
 	--schema diff'ing ---------------------------------------------------------
 
 	spp.schema_options = {
@@ -121,11 +148,11 @@ function sqlpp.package.mysql(spp)
 			decimals=1,
 			size=1,
 			maxlen=1,
-			unsigned=1,
 			not_null=1,
 			auto_increment=1,
 			comment=1,
 			mysql_type=1,
+			unsigned=1,
 			mysql_collation=1,
 			mysql_default=1,
 			mysql_on_update=1,
@@ -206,13 +233,12 @@ function sqlpp.package.mysql(spp)
 		return dt
 	end
 
-	function cmd:get_table_defs(db, tbl, opt)
+	function cmd:get_table_defs(opt)
 
 		opt = opt or empty
 		local tables = {} --{DB.TBL->table}
 
-		local sql_db  = db  and self:sqlval(db)
-		local sql_tbl = tbl and self:sqlval(tbl)
+		local sql_db = opt.db and self:sqlval(opt.db)
 
 		for i, db_tbl, grp in spp.each_group('db_tbl', self:assert(self:rawquery([[
 			select
@@ -236,9 +262,7 @@ function sqlpp.package.mysql(spp)
 				information_schema.columns
 			where
 				table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-				and ]]..(catargs(' and ',
-						db  and 'table_schema = '..sql_db,
-						tbl and 'table_name   = '..sql_tbl) or '1 = 1')..[[
+				]]..(db and ' and table_schema = '..sql_db or '')..[[
 			order by
 				table_schema, table_name, ordinal_position
 			]])))
@@ -297,9 +321,7 @@ function sqlpp.package.mysql(spp)
 					and rc.constraint_name   = kcu.constraint_name
 			where
 				cs.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-				and ]]..(catargs(' and ',
-						db  and 'cs.table_schema = '..sql_db,
-						tbl and 'cs.table_name   = '..sql_tbl) or '1 = 1')..[[
+				]]..(db and ' and cs.table_schema = '..sql_db or '')..[[
 			order by
 				cs.table_schema, cs.table_name, cs.constraint_name, kcu.ordinal_position
 			]])))
@@ -357,9 +379,7 @@ function sqlpp.package.mysql(spp)
 					and cs.constraint_name  = s.index_name
 				where
 					s.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-					and ]]..(catargs(' and ',
-							db  and 's.table_schema = '..sql_db,
-							tbl and 's.table_name   = '..sql_tbl) or '1 = 1')..[[
+					]]..(db and ' and s.table_schema = '..sql_db or '')..[[
 				order by
 					s.table_schema, s.table_name, s.index_name, s.seq_in_index
 				]])))
@@ -401,9 +421,7 @@ function sqlpp.package.mysql(spp)
 					and cs.constraint_name = cc.constraint_name
 				where
 					cs.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-					and ]]..(catargs(' and ',
-							db  and 'cs.table_schema = '..sql_db,
-							tbl and 'cs.table_name   = '..sql_tbl) or '1 = 1')..[[
+					]]..(db and ' and cs.table_schema = '..sql_db or '')..[[
 				order by
 					cs.table_schema, cs.table_name
 				]])))
@@ -430,9 +448,7 @@ function sqlpp.package.mysql(spp)
 				where
 					event_object_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
 					and definer = current_user
-					and ]]..(catargs(' and ',
-							db  and 'event_object_schema = '..sql_db,
-							tbl and 'event_object_table  = '..sql_tbl) or '1 = 1')..[[
+					]]..(db and ' and event_object_schema = '..sql_db or '')..[[
 				order by
 					event_object_schema, event_object_table
 				]])))
@@ -568,9 +584,5 @@ function sqlpp.package.mysql(spp)
 end
 
 return {
-	new = function(...)
-		local spp = sqlpp.new(...)
-		spp.import'mysql'
-		return spp
-	end,
+	init_spp = init_spp,
 }
