@@ -96,11 +96,6 @@ local function init_spp(spp, cmd)
 		]], {compact = true})))
 	end
 
-	local needs_quoting = cmd.needs_quoting
-	function cmd:needs_quoting(s)
-		return needs_quoting(self, s) or (s ~= s:lower() and s ~= s:upper())
-	end
-
 	--SQL formatting ----------------------------------------------------------
 
 	spp.engine = 'mysql'
@@ -144,6 +139,7 @@ local function init_spp(spp, cmd)
 		supports_triggers = true,
 		supports_procs = true,
 		relevant_field_attrs = {
+			col_index=1,
 			digits=1,
 			decimals=1,
 			size=1,
@@ -300,6 +296,7 @@ local function init_spp(spp, cmd)
 		for i, db_tbl, constraints in spp.each_group('db_tbl', self:assert(self:rawquery([[
 			select
 				concat(cs.table_schema, '.', cs.table_name) db_tbl,
+				cs.table_schema as db,
 				cs.table_name,
 				kcu.column_name col,
 				cs.constraint_name,
@@ -332,8 +329,12 @@ local function init_spp(spp, cmd)
 				if cs_type == 'PRIMARY KEY' then
 					tbl.pk = imap(grp, row_col)
 				elseif cs_type == 'FOREIGN KEY' then
+					local db      = grp[1].db
 					local ref_db  = grp[1].ref_db
-					local ref_tbl = (ref_db ~= db and ref_db..'.' or '')..grp[1].ref_tbl
+					local ref_tbl = grp[1].ref_tbl
+					if ref_db ~= db then --external fk
+						ref_tbl = ref_db..'.'..ref_tbl
+					end
 					if #grp == 1 then
 						local field = tbl.fields[grp[1].col]
 						field.ref_table = ref_tbl

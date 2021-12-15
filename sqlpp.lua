@@ -703,7 +703,7 @@ function sqlpp.new(init)
 		--add new fks for added tables.
 		if diff.tables and diff.tables.add then
 			for tbl_name, tbl in sortedpairs(diff.tables.add) do
-				if tbl.fks then
+				if tbl.fks and diff.old_schema.supports_fks then
 					for fk_name, fk in sortedpairs(tbl.fks) do
 						P('alter table %-16s add %s',
 							N(tbl_name), self:sqlfk(fk_name, fk))
@@ -1338,6 +1338,15 @@ function sqlpp.new(init)
 				%s
 		]], self:sqlname(tbl), cols_sql, rows_sql)
 		return pass(self:query({parse = false}, sql))
+	end
+
+	function cmd:copy_table(tbl, dst_spp)
+		local rows, cols = self:query({compact=1, noparse=1},
+			'select * from '..self:sqlname(tbl))
+		for i,row in ipairs(rows) do
+			pp(dst_spp:raw_insert_row(tbl, row, #cols))
+			break
+		end
 	end
 
 	init(spp, cmd)
