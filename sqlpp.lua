@@ -434,11 +434,12 @@ function sqlpp.new(init)
 		return cat(dt, ', ')
 	end
 
-	function cmd:sqlcol(fld, tbl)
+	function cmd:sqlcol(fld, with_col_position)
 		return _('%-16s %-14s %s%s', self:sqlname(fld.col), self:sqltype(fld),
-			self:sqlcol_flags(fld, tbl) or '',
-				fld.col_in_front == false and ' first'
-				or fld.col_in_front and ' after '..self:sqlname(fld.col_in_front)
+			self:sqlcol_flags(fld) or '',
+				with_col_position
+				and (fld.col_in_front == false and ' first'
+					or fld.col_in_front and ' after '..self:sqlname(fld.col_in_front))
 				or ''
 		)
 	end
@@ -491,7 +492,7 @@ function sqlpp.new(init)
 	function cmd:sqltable(t)
 		local dt = {}
 		for i,fld in ipairs(t.fields) do
-			dt[i] = self:sqlcol(fld, t)
+			dt[i] = self:sqlcol(fld)
 		end
 		if t.pk then
 			add(dt, self:sqlpk(t.pk, t.name))
@@ -622,50 +623,62 @@ function sqlpp.new(init)
 		if diff.tables and diff.tables.update then
 			for tbl_name, d in sortedpairs(diff.tables.update) do
 
+				local function old_field_behind(col)
+					for _, fld in ipairs(d.old.fields) do
+						if fld.col_in_front == col then
+							return fld
+						end
+					end
+				end
+
 				--remove columns.
 				if d.fields and d.fields.remove then
-					for col in sortedpairs(d.fields.remove) do
+					for col, fld in sortedpairs(d.fields.remove) do
 						P('alter table %-16s drop %-16s %s',
 							N(tbl_name), 'column', N(col))
+
+						--fix the implicit change of `col_in_front` attr of the
+						--col that was behind this col, in order to avoid
+						--no-op col moves.
+						local obf = old_field_behind(col)
+						if obf then obf.col_in_front = fld.col_in_front end
 					end
 				end
 
 				--add columns.
 				--we have to update columns in col index order otherwise
 				--the `after` sql clause won't work (think about it).
-				local function cmp_by_col_index(col1, col2)
+				local function cmp_by_col_pos(col1, col2)
 					local f1 = d.fields.add[col1]
 					local f2 = d.fields.add[col2]
-					return f1.col_index < f2.col_index
+					return f1.col_pos < f2.col_pos
 				end
 				if d.fields and d.fields.add then
-					for col, fld in sortedpairs(d.fields.add, cmp_by_col_index) do
-						P('alter table %-16s add %s', N(tbl_name), self:sqlcol(fld))
+					for col, fld in sortedpairs(d.fields.add, cmp_by_col_pos) do
+						P('alter table %-16s add %s',
+							N(tbl_name), self:sqlcol(fld, true))
+
+						--fix the implicit change of `col_in_front` attr of the
+						--col that is now behind this col, in order to avoid
+						--no-op col moves.
+						local nbf = old_field_behind(fld.col_in_front)
+						if nbf then nbf.col_in_front = col end
 					end
 				end
 
 				--modify columns (incl. changing column order).
 				if d.fields and d.fields.update then
 
-					local old_tbl = d.old
-					local function old_field_behind(col)
-						for _, fld in ipairs(old_tbl.fields) do
-							if fld.col_in_front == col then
-								return fld
-							end
-						end
-					end
-
 					--we have to update fields in new col index order otherwise
 					--the `after` sql clause won't work (think about it).
 					local diffs = d.fields.update
-					local function cmp_by_col_index(col1, col2)
+					local function cmp_by_col_pos(col1, col2)
 						local d1 = diffs[col1]
 						local d2 = diffs[col2]
-						return d1.new.col_index < d2.new.col_index
+						return d1.new.col_pos < d2.new.col_pos
 					end
 
-					for col, d in sortedpairs(diffs, cmp_by_col_index) do
+					for col, d in sortedpairs(diffs, cmp_by_col_pos) do
 						if d.changed.col_in_front and count(d.changed) == 1
 							and d.old.col_in_front == d.new.col_in_front
 						then
@@ -673,16 +686,16 @@ function sqlpp.new(init)
 							--turns out that was sorted out by a prev. col move.
 						else
 							P('alter table %-16s change %-16s %s',
-								N(tbl_name), N(col), self:sqlcol(d.new))
+								N(tbl_name), N(col), self:sqlcol(d.new, true))
 
 							--fix the implicit change of `col_in_front` attr of the
 							--col that was behind this col, and of the col that is
 							--now behind this col, in order to avoid no-op col moves.
 							if d.changed.col_in_front then
-								local fld = old_field_behind(col)
-								if fld then fld.col_in_front = d.old.col_in_front end
-								local fld = old_field_behind(d.new.col_in_front)
-								if fld then fld.col_in_front = col end
+								local obf = old_field_behind(col)
+								if obf then obf.col_in_front = d.old.col_in_front end
+								local nbf = old_field_behind(d.new.col_in_front)
+								if nbf then nbf.col_in_front = col end
 							end
 						end
 					end

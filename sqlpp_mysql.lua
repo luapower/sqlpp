@@ -119,7 +119,7 @@ local function init_spp(spp, cmd)
 		end
 	end
 
-	function cmd:sqlcol_flags(fld, tbl)
+	function cmd:sqlcol_flags(fld)
 		return catargs(' ',
 			fld.unsigned and 'unsigned' or nil,
 			fld.mysql_collation and 'collate '..fld.mysql_collation or nil,
@@ -268,7 +268,7 @@ local function init_spp(spp, cmd)
 				local auto_increment = row.extra == 'auto_increment' or nil
 				local field = make_field(row)
 				field.col = col
-				field.col_index = i
+				field.col_pos = i
 				field.col_in_front = i > 1 and fields[i-1].col
 				field.auto_increment = auto_increment
 				field.not_null = row.is_nullable == 'NO' or nil

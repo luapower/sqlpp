@@ -110,7 +110,7 @@ local function init_spp(spp, cmd)
 		return fld.tarantool_type
 	end
 
-	function cmd:sqlcol_flags(fld, tbl)
+	function cmd:sqlcol_flags(fld)
 		return catargs(' ',
 			fld.tarantool_collation and 'collate "'..fld.tarantool_collation..'"' or nil,
 			fld.not_null and 'not null' or nil,
@@ -186,7 +186,7 @@ local function init_spp(spp, cmd)
 							col = fm.name:lower(),
 							tarantool_type = fm.type,
 							not_null = fm.is_nullable == false or nil,
-							col_index = i,
+							col_pos = i,
 							auto_increment = seq and seq[2] == i or nil,
 							tarantool_collation = coll and coll[2],
 						}
