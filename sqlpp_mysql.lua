@@ -139,7 +139,7 @@ local function init_spp(spp, cmd)
 		supports_triggers = true,
 		supports_procs = true,
 		relevant_field_attrs = {
-			col_index=1,
+			col_in_front=1,
 			digits=1,
 			decimals=1,
 			size=1,
@@ -241,7 +241,6 @@ local function init_spp(spp, cmd)
 				concat(table_schema, '.', table_name) db_tbl,
 				table_name,
 				column_name,
-				ordinal_position,
 				data_type,
 				column_type,
 				column_key,
@@ -269,7 +268,8 @@ local function init_spp(spp, cmd)
 				local auto_increment = row.extra == 'auto_increment' or nil
 				local field = make_field(row)
 				field.col = col
-				field.col_index = row.ordinal_position
+				field.col_index = i
+				field.col_in_front = i > 1 and fields[i-1].col
 				field.auto_increment = auto_increment
 				field.not_null = row.is_nullable == 'NO' or nil
 				field.mysql_default = row.column_default

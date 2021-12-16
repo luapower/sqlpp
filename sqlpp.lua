@@ -435,8 +435,12 @@ function sqlpp.new(init)
 	end
 
 	function cmd:sqlcol(fld, tbl)
-		return _('%-16s %-14s %s', self:sqlname(fld.col), self:sqltype(fld),
-			self:sqlcol_flags(fld, tbl) or '')
+		return _('%-16s %-14s %s%s', self:sqlname(fld.col), self:sqltype(fld),
+			self:sqlcol_flags(fld, tbl) or '',
+				fld.col_in_front == false and ' first'
+				or fld.col_in_front and ' after '..self:sqlname(fld.col_in_front)
+				or ''
+		)
 	end
 
 	function cmd:sqlpk(pk, tbl_name)
@@ -617,26 +621,74 @@ function sqlpp.new(init)
 		--update tables.
 		if diff.tables and diff.tables.update then
 			for tbl_name, d in sortedpairs(diff.tables.update) do
+
+				--remove columns.
 				if d.fields and d.fields.remove then
 					for col in sortedpairs(d.fields.remove) do
-						P('alter table %-16s drop %-16s %s', N(tbl_name), 'column', N(col))
+						P('alter table %-16s drop %-16s %s',
+							N(tbl_name), 'column', N(col))
 					end
+				end
+
+				--add columns.
+				--we have to update columns in col index order otherwise
+				--the `after` sql clause won't work (think about it).
+				local function cmp_by_col_index(col1, col2)
+					local f1 = d.fields.add[col1]
+					local f2 = d.fields.add[col2]
+					return f1.col_index < f2.col_index
 				end
 				if d.fields and d.fields.add then
-					for col, fld in sortedpairs(d.fields.add) do
+					for col, fld in sortedpairs(d.fields.add, cmp_by_col_index) do
 						P('alter table %-16s add %s', N(tbl_name), self:sqlcol(fld))
-						--TODO: after...
 					end
 				end
+
+				--modify columns (incl. changing column order).
 				if d.fields and d.fields.update then
-					for col, d in sortedpairs(d.fields.update) do
-						P('alter table %-16s change %-16s %s',
-							N(tbl_name),
-							N(col),
-							self:sqlcol(d.new)
-						)
+
+					local old_tbl = d.old
+					local function old_field_behind(col)
+						for _, fld in ipairs(old_tbl.fields) do
+							if fld.col_in_front == col then
+								return fld
+							end
+						end
 					end
+
+					--we have to update fields in new col index order otherwise
+					--the `after` sql clause won't work (think about it).
+					local diffs = d.fields.update
+					local function cmp_by_col_index(col1, col2)
+						local d1 = diffs[col1]
+						local d2 = diffs[col2]
+						return d1.new.col_index < d2.new.col_index
+					end
+
+					for col, d in sortedpairs(diffs, cmp_by_col_index) do
+						if d.changed.col_in_front and count(d.changed) == 1
+							and d.old.col_in_front == d.new.col_in_front
+						then
+							--`col_in_front` is the only attr that changed and as it
+							--turns out that was sorted out by a prev. col move.
+						else
+							P('alter table %-16s change %-16s %s',
+								N(tbl_name), N(col), self:sqlcol(d.new))
+
+							--fix the implicit change of `col_in_front` attr of the
+							--col that was behind this col, and of the col that is
+							--now behind this col, in order to avoid no-op col moves.
+							if d.changed.col_in_front then
+								local fld = old_field_behind(col)
+								if fld then fld.col_in_front = d.old.col_in_front end
+								local fld = old_field_behind(d.new.col_in_front)
+								if fld then fld.col_in_front = col end
+							end
+						end
+					end
+
 				end
+
 				if d.remove_pk then
 					P('alter table %-16s drop primary key', N(tbl_name))
 				end
@@ -644,16 +696,20 @@ function sqlpp.new(init)
 					P('alter table %-16s add %s', N(tbl_name),
 						self:sqlpk(d.add_pk, tbl_name))
 				end
+
 				if d.uks and d.uks.remove then
 					for uk_name in sortedpairs(d.uks.remove) do
-						P('alter table %-16s drop %-16s %s', N(tbl_name), 'key', N(uk_name))
+						P('alter table %-16s drop %-16s %s',
+							N(tbl_name), 'key', N(uk_name))
 					end
 				end
 				if d.uks and d.uks.add then
 					for uk_name, uk in sortedpairs(d.uks.add) do
-						P('alter table %-16s add %s', N(tbl_name), self:sqluk(uk_name, uk))
+						P('alter table %-16s add %s',
+							N(tbl_name), self:sqluk(uk_name, uk))
 					end
 				end
+
 				if d.ixs and d.ixs.remove then
 					for ix_name in sortedpairs(d.ixs.remove) do
 						P('drop index %-16s on %-16s', N(ix_name), N(tbl_name))
@@ -664,16 +720,20 @@ function sqlpp.new(init)
 						P('create %s', self:sqlix(ix_name, ix, tbl_name))
 					end
 				end
+
 				if d.checks and d.checks.remove then
 					for ck_name in sortedpairs(d.checks.remove) do
-						P('alter table %-16s drop %-16s %s', N(tbl_name), 'check', N(ck_name))
+						P('alter table %-16s drop %-16s %s',
+							N(tbl_name), 'check', N(ck_name))
 					end
 				end
 				if d.checks and d.checks.add then
 					for ck_name, ck in sortedpairs(d.checks.add) do
-						P('alter table %-16s add %s', N(tbl_name), self:sqlcheck(ck_name, ck))
+						P('alter table %-16s add %s',
+							N(tbl_name), self:sqlcheck(ck_name, ck))
 					end
 				end
+
 				if d.triggers and d.triggers.remove then
 					for tg_name, tg in sortedpairs(d.triggers.remove) do
 						if tg[BODY] then P('drop trigger %-16s', N(tg_name)) end
@@ -685,6 +745,7 @@ function sqlpp.new(init)
 						if s then P('create '..s) end
 					end
 				end
+
 			end
 		end
 
