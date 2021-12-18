@@ -127,7 +127,8 @@ local function init_spp(spp, cmd)
 		supports_triggers = true,
 		supports_procs = true,
 		relevant_field_attrs = {
-			col_in_front=1,
+			col=1,
+			col_pos=1,
 			not_null=1,
 			auto_increment=1,
 			tarantool_type=1,

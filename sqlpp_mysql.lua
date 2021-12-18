@@ -139,7 +139,8 @@ local function init_spp(spp, cmd)
 		supports_triggers = true,
 		supports_procs = true,
 		relevant_field_attrs = {
-			col_in_front=1,
+			col=1,
+			col_pos=1,
 			digits=1,
 			decimals=1,
 			size=1,
