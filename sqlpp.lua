@@ -443,7 +443,7 @@ function sqlpp.new(init)
 	end
 
 	function cmd:sqlpk(pk, tbl_name)
-		return _('constraint %-20s primary key (%s)', 'pk_'..tbl_name, ix_cols(self, pk))
+		return _('primary key (%s)', ix_cols(self, pk))
 	end
 
 	function cmd:sqluk(name, uk)
@@ -567,7 +567,7 @@ function sqlpp.new(init)
 
 		--drop gathered fks.
 		for fk in sortedpairs(fk_bin, function(fk1, fk2) return fk1.name < fk2.name end) do
-			P('alter table %-16s drop %-16s %s', N(fk.table), 'foreign key', N(fk.name))
+			P('alter  table %-16s drop %-16s %s', N(fk.table), 'foreign key', N(fk.name))
 		end
 
 		--drop procs.
@@ -619,7 +619,7 @@ function sqlpp.new(init)
 
 		--update tables.
 		if diff.tables and diff.tables.update then
-			for tbl_name, d in sortedpairs(diff.tables.update) do
+			for old_tbl_name, d in sortedpairs(diff.tables.update) do
 
 				if d.fields then
 
@@ -635,7 +635,7 @@ function sqlpp.new(init)
 							return f1.col_pos < f2.col_pos
 						end
 						for col, fld in sortedpairs(d.fields.remove, cmp_by_col_pos) do
-							add(changes, _('drop %s', N(col)))
+							add(changes, _('drop   %s', N(col)))
 						end
 					end
 
@@ -647,7 +647,7 @@ function sqlpp.new(init)
 							return f1.col_pos < f2.col_pos
 						end
 						for col, fld in sortedpairs(d.fields.add, cmp_by_col_pos) do
-							add(changes, _('add %s', self:sqlcol(fld, fld.col_in_front)))
+							add(changes, _('add    %s', self:sqlcol(fld, fld.col_in_front)))
 						end
 					end
 
@@ -665,30 +665,22 @@ function sqlpp.new(init)
 					end
 
 					if #changes > 0 then
-						P('alter table %-16s\n\t%s',
-							N(tbl_name), concat(changes, ',\n\t'))
+						P('alter  table %-16s\n\t%s',
+							N(old_tbl_name), concat(changes, ',\n\t'))
 					end
 
 				end --d.fields
 
+				--remove constraints, indexes and triggers.
+
 				if d.remove_pk then
-					P('alter table %-16s drop primary key', N(tbl_name))
-				end
-				if d.add_pk then
-					P('alter table %-16s add %s', N(tbl_name),
-						self:sqlpk(d.add_pk, tbl_name))
+					P('alter  table %-16s drop primary key', N(old_tbl_name))
 				end
 
 				if d.uks and d.uks.remove then
 					for uk_name in sortedpairs(d.uks.remove) do
-						P('alter table %-16s drop %-16s %s',
+						P('alter  table %-16s drop %-16s %s',
 							N(tbl_name), 'key', N(uk_name))
-					end
-				end
-				if d.uks and d.uks.add then
-					for uk_name, uk in sortedpairs(d.uks.add) do
-						P('alter table %-16s add %s',
-							N(tbl_name), self:sqluk(uk_name, uk))
 					end
 				end
 
@@ -697,22 +689,10 @@ function sqlpp.new(init)
 						P('drop index %-16s on %-16s', N(ix_name), N(tbl_name))
 					end
 				end
-				if d.ixs and d.ixs.add then
-					for ix_name, ix in sortedpairs(d.ixs.add) do
-						P('create %s', self:sqlix(ix_name, ix, tbl_name))
-					end
-				end
-
 				if d.checks and d.checks.remove then
 					for ck_name in sortedpairs(d.checks.remove) do
-						P('alter table %-16s drop %-16s %s',
+						P('alter  table %-16s drop %-16s %s',
 							N(tbl_name), 'check', N(ck_name))
-					end
-				end
-				if d.checks and d.checks.add then
-					for ck_name, ck in sortedpairs(d.checks.add) do
-						P('alter table %-16s add %s',
-							N(tbl_name), self:sqlcheck(ck_name, ck))
 					end
 				end
 
@@ -721,9 +701,45 @@ function sqlpp.new(init)
 						if tg[BODY] then P('drop trigger %-16s', N(tg_name)) end
 					end
 				end
+
+				--rename table before adding constraints back.
+
+				local new_tbl_name = d.new.name
+
+				if old_tbl_name ~= new_tbl_name then
+					P('rename table %-16s to %-16s', N(old_tbl_name), N(new_tbl_name))
+				end
+
+				--add constraints, indexes and triggers.
+
+				if d.add_pk then
+					P('alter  table %-16s add %s', N(new_tbl_name),
+						self:sqlpk(d.add_pk, tbl_name))
+				end
+
+				if d.uks and d.uks.add then
+					for uk_name, uk in sortedpairs(d.uks.add) do
+						P('alter  table %-16s add %s',
+							N(new_tbl_name), self:sqluk(uk_name, uk))
+					end
+				end
+
+				if d.ixs and d.ixs.add then
+					for ix_name, ix in sortedpairs(d.ixs.add) do
+						P('create %s', self:sqlix(ix_name, ix, new_tbl_name))
+					end
+				end
+
+				if d.checks and d.checks.add then
+					for ck_name, ck in sortedpairs(d.checks.add) do
+						P('alter  table %-16s add %s',
+							N(new_tbl_name), self:sqlcheck(ck_name, ck))
+					end
+				end
+
 				if d.triggers and d.triggers.add then
 					for tg_name, tg in sortedpairs(d.triggers.add) do
-						local s = self:sqltrigger(tbl_name, tg_name, tg)
+						local s = self:sqltrigger(new_tbl_name, tg_name, tg)
 						if s then P('create '..s) end
 					end
 				end
@@ -733,11 +749,12 @@ function sqlpp.new(init)
 
 		--add new fks for current tables.
 		if diff.tables and diff.tables.update then
-			for tbl_name, d in sortedpairs(diff.tables.update) do
+			for _, d in sortedpairs(diff.tables.update) do
+				local new_tbl_name = d.new.name
 				if d.fks and d.fks.add then
 					for fk_name, fk in sortedpairs(d.fks.add) do
-						P('alter table %-16s add %s',
-							N(tbl_name), self:sqlfk(fk_name, fk))
+						P('alter  table %-16s add %s',
+							N(new_tbl_name), self:sqlfk(fk_name, fk))
 					end
 				end
 			end
@@ -748,7 +765,7 @@ function sqlpp.new(init)
 			for tbl_name, tbl in sortedpairs(diff.tables.add) do
 				if tbl.fks and diff.old_schema.supports_fks then
 					for fk_name, fk in sortedpairs(tbl.fks) do
-						P('alter table %-16s add %s',
+						P('alter  table %-16s add %s',
 							N(tbl_name), self:sqlfk(fk_name, fk))
 					end
 				end
@@ -1153,7 +1170,8 @@ function sqlpp.new(init)
 	end
 
 	function cmd:tables(db)
-		return self:exec_with_options({to_array=1}, 'show tables from ??', db or self.db)
+		return self:exec_with_options({to_array=1},
+			'show tables from ??', db or self.db)
 	end
 
 	local server_caches = {}

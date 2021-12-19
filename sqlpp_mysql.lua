@@ -4,6 +4,7 @@
 	Written by Cosmin Apreutesei. Public Domain.
 
 	Schema NYI:
+	- views
 	- functions
 	- index type
 	- table engine
@@ -344,6 +345,7 @@ local function init_spp(spp, cmd)
 					local cols = imap(grp, row_col)
 					cols.desc = imap(cols, return_false) --in case there's no matching index.
 					attr(tbl, 'fks')[cs_name] = {
+						name      = cs_name,
 						table     = tbl.name,
 						ref_table = ref_tbl,
 						cols      = cols,
