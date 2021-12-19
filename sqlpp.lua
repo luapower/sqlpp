@@ -1257,11 +1257,24 @@ function sqlpp.new(init)
 		local this_sc = self:extract_schema()
 		local diff = schema.diff(this_sc, src_sc)
 		local qopt = {parse = false}
-		for _,sql in ipairs(self:sqldiff(diff)) do
+		local sqls = self:sqldiff(diff)
+		if #sqls == 0 then
 			if opt.dry then
-				print(sql)
-			else
-				self:query(qopt, sql)
+				print'\n/***** SCHEMA ALREADY SYNC\'ED ******/\n'
+			end
+		else
+			if opt.dry then
+				print'\n/******** BEGIN SYNC SCHEMA ********/\n'
+			end
+			for _,sql in ipairs(sqls) do
+				if opt.dry then
+					print(sql)
+				else
+					self:query(qopt, sql)
+				end
+			end
+			if opt.dry then
+				print'\n/********* END SYNC SCHEMA *********/\n'
 			end
 		end
 	end
