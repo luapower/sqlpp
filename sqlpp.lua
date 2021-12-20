@@ -38,7 +38,7 @@ function sqlpp.new(init)
 	end
 
 	local spp = {is_sqlpp = true}
-	local cmd = {}
+	local cmd = {spp = spp}
 	spp.command = cmd
 
 	local avoid_code = string.byte'?' --because we're gonna match '?' alone later
@@ -1414,13 +1414,28 @@ function sqlpp.new(init)
 		return pass(self:query({parse = false}, sql))
 	end
 
-	function cmd:copy_table(tbl, dst_spp)
+	function cmd:copy_table(tbl, dst_cmd)
+
 		local rows, cols = self:query({compact=1, noparse=1},
 			'select * from '..self:sqlname(tbl))
-		for i,row in ipairs(rows) do
-			pp(dst_spp:raw_insert_row(tbl, row, #cols))
-			break
+
+		local CONVERT = spp.engine .. '_to_' .. dst_cmd.spp.engine
+		for fi,col in ipairs(cols) do
+			local f = col[CONVERT]
+			if f then
+				for ri,row in ipairs(rows) do
+					row[fi] = f(row[fi], col, row, spp)
+				end
+			end
 		end
+
+		for i,row in ipairs(rows) do
+			dst_cmd:raw_insert_row(tbl, row, #cols)
+			if i % 10000 == 0 then
+				print(i)
+			end
+		end
+
 	end
 
 	init(spp, cmd)

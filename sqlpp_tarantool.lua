@@ -450,7 +450,7 @@ local function init_spp(spp, cmd)
 	--DDL commands ------------------------------------------------------------
 
 	function cmd:raw_insert_row(tbl, t, col_count)
-		return self.rawconn:insert(tbl:upper(), mp.toarray(t, col_count))
+		return self.rawconn:replace(tbl:upper(), mp.toarray(t, col_count))
 	end
 
 end
